@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -219,6 +220,9 @@ GOOSE_MODE: smart_approve
 `
 
 func TestGooseYAML(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Goose is offered on macOS and Linux only")
+	}
 	e := newEnv(t)
 	a := mustFind(t, "goose")
 	path := filepath.Join(e.Home, ".config", "goose", "config.yaml")
@@ -452,4 +456,54 @@ func FuzzSetJSON(f *testing.F) {
 			t.Fatalf("remove %q: %v", out, err)
 		}
 	})
+}
+
+// TestWindowsFiles: where each agent's settings are on Windows, per its
+// docs: the per-user apps under %APPDATA%, the CLIs under the profile.
+func TestWindowsFiles(t *testing.T) {
+	home := filepath.FromSlash("/Users/me")
+	appData := filepath.Join(home, "AppData", "Roaming")
+	e := &Env{Home: home, AppData: appData, GOOS: "windows", LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
+	h := func(p string) string { return filepath.Join(home, filepath.FromSlash(p)) }
+	ad := func(p string) string { return filepath.Join(appData, filepath.FromSlash(p)) }
+	want := map[string]string{
+		"claude-code":      h(".claude.json"),
+		"cursor":           h(".cursor/mcp.json"),
+		"codex":            h(".codex/config.toml"),
+		"gemini":           h(".gemini/settings.json"),
+		"qwen":             h(".qwen/settings.json"),
+		"opencode":         h(".config/opencode/opencode.json"),
+		"pi":               h(".pi/agent/mcp.json"),
+		"kimi":             h(".kimi-code/mcp.json"),
+		"iflow":            h(".iflow/settings.json"),
+		"crush":            "",
+		"amp":              h(".config/amp/settings.json"),
+		"goose":            "",
+		"deepseek-harness": h(".dsh/cordis.patch.yml"),
+		"claude-desktop":   ad("Claude/claude_desktop_config.json"),
+		"vscode":           ad("Code/User/mcp.json"),
+		"windsurf":         h(".codeium/windsurf/mcp_config.json"),
+		"zed":              ad("Zed/settings.json"),
+		"kiro":             h(".kiro/settings/mcp.json"),
+		"cline":            ad("Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
+	}
+	if len(want) != len(All) {
+		t.Fatalf("%d agents, %d checked", len(All), len(want))
+	}
+	for _, a := range All {
+		w, ok := want[a.ID]
+		if !ok {
+			t.Errorf("%s not checked", a.ID)
+			continue
+		}
+		if got := e.File(a); got != w {
+			t.Errorf("%s: %q, want %q", a.ID, got, w)
+		}
+	}
+	// Without %APPDATA%: the profile's AppData\Roaming.
+	e.AppData = ""
+	vs, _ := Find("vscode")
+	if got := e.File(vs); got != ad("Code/User/mcp.json") {
+		t.Errorf("vscode without APPDATA: %q", got)
+	}
 }

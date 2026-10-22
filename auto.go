@@ -245,9 +245,10 @@ func unmanaged(v *vault.Vault, path string) int {
 	return scan.Unmanaged(p)
 }
 
-// envLabel is a .env as its folder and name: my-app/.env.
+// envLabel is a .env as its folder and name: my-app/.env (my-app\.env
+// on Windows).
 func envLabel(p string) string {
-	return filepath.Base(filepath.Dir(p)) + "/" + filepath.Base(p)
+	return filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p))
 }
 
 func (a *app) dropEnvNote(path string) {

@@ -35,7 +35,7 @@ func TestScanCLI(t *testing.T) {
 		t.Fatalf("%d %s", c, x.err.String())
 	}
 	out := x.out.String()
-	for _, want := range []string{"~/code/my-app/.env", "✓ OPENAI_API_KEY", "sk-proj-… 48 位", "· PORT", "~/.zshrc", "✓ GITHUB_TOKEN", "ghp_… 40 位", "打勾的 3 个（2 个文件）"} {
+	for _, want := range []string{filepath.FromSlash("~/code/my-app/.env"), "✓ OPENAI_API_KEY", "sk-proj-… 48 位", "· PORT", filepath.FromSlash("~/.zshrc"), "✓ GITHUB_TOKEN", "ghp_… 40 位", "打勾的 3 个（2 个文件）"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
@@ -64,7 +64,7 @@ func TestScanCLI(t *testing.T) {
 	if bb, _ := os.ReadFile(env + scan.BackupSuffix); !strings.Contains(string(bb), dummyOpenAI) {
 		t.Error("no backup")
 	}
-	if !strings.Contains(x.out.String(), "备份在 ~/code/my-app/.env.keybar-backup") {
+	if !strings.Contains(x.out.String(), "备份在 "+filepath.FromSlash("~/code/my-app/.env.keybar-backup")) {
 		t.Error(x.out.String())
 	}
 	// again: the rc file, the .env now has nothing; the backup is not scanned

@@ -133,7 +133,7 @@ func TestEnvNoticeAndScan(t *testing.T) {
 	}
 	tt := ui.NewTester(h.view, panelWidth, panelHeight)
 	tt.Frame()
-	if !tt.HasText("new-app/.env 有 2 个新 key") {
+	if !tt.HasText(filepath.FromSlash("new-app/.env") + " 有 2 个新 key") {
 		t.Error("no notice")
 	}
 	// 导入: the file's checklist
@@ -183,12 +183,12 @@ func TestScanMachine(t *testing.T) {
 	for _, g := range s.groups {
 		paths = append(paths, h.shortHome(g.Plan.Path))
 	}
-	if strings.Join(paths, ",") != "~/code/blog/.env.local,~/code/my-app/.env,~/.zshrc" {
+	if strings.Join(paths, ",") != filepath.FromSlash("~/code/blog/.env.local,~/code/my-app/.env,~/.zshrc") {
 		t.Error(paths)
 	}
 	tt := ui.NewTester(h.view, panelWidth, panelHeight)
 	tt.Frame()
-	for _, want := range []string{"~/code/my-app/.env", "OPENAI_API_KEY", "sk-proj-… 60 位", "不像密钥", "shell 配置 · export"} {
+	for _, want := range []string{filepath.FromSlash("~/code/my-app/.env"), "OPENAI_API_KEY", "sk-proj-… 60 位", "不像密钥", "shell 配置 · export"} {
 		if !tt.HasText(want) {
 			t.Errorf("no %q", want)
 		}

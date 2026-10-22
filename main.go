@@ -24,7 +24,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 // cliCommands are the arguments that make the app its command line.
 var cliCommands = []string{"help", "-h", "--help", "version", "add", "set", "get", "ls", "list", "show", "rm", "edit", "run",

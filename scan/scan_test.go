@@ -3,6 +3,7 @@ package scan
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -118,7 +119,7 @@ func TestRemovePlaintextEnv(t *testing.T) {
 		}
 		st, _ := os.Stat(p)
 		bs, _ := os.Stat(backup)
-		if st.Mode().Perm() != 0o640 || bs.Mode().Perm() != 0o600 {
+		if runtime.GOOS != "windows" && (st.Mode().Perm() != 0o640 || bs.Mode().Perm() != 0o600) { // no Unix modes there
 			t.Errorf("modes %v %v", st.Mode(), bs.Mode())
 		}
 	}

@@ -827,7 +827,7 @@ func (a *app) openImport() {
 // expandHome reads ~/ as the home folder.
 func expandHome(p string) string {
 	p = strings.Trim(strings.TrimSpace(p), `"'`)
-	if p == "~" || strings.HasPrefix(p, "~/") {
+	if p == "~" || strings.HasPrefix(p, "~/") || filepath.Separator == '\\' && strings.HasPrefix(p, `~\`) {
 		if home, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(home, p[1:])
 		}

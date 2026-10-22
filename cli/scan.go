@@ -212,7 +212,7 @@ func expandHome(p, home string) string {
 	if p == "~" {
 		return home
 	}
-	if strings.HasPrefix(p, "~/") {
+	if strings.HasPrefix(p, "~/") || filepath.Separator == '\\' && strings.HasPrefix(p, `~\`) {
 		return filepath.Join(home, p[2:])
 	}
 	return p

@@ -495,7 +495,7 @@ func TestConnectAgentsUI(t *testing.T) {
 			missing++
 		}
 	}
-	if !tt.HasText("连接 AI 代理") || !tt.HasText("已连接 · ~/.claude.json") || !tt.HasText("未连接 · ~/.cursor/mcp.json") ||
+	if !tt.HasText("连接 AI 代理") || !tt.HasText("已连接 · "+filepath.FromSlash("~/.claude.json")) || !tt.HasText("未连接 · "+filepath.FromSlash("~/.cursor/mcp.json")) ||
 		!tt.HasText(fmt.Sprintf("未安装 %d", missing)) || tt.HasText("Codex") {
 		t.Errorf("%q", tt.Texts())
 	}
