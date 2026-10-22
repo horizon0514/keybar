@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -208,7 +209,7 @@ func TestSettings(t *testing.T) {
 		t.Error("not saved")
 	}
 	st, _ := os.Stat(filepath.Join(dir, "settings.json"))
-	if st.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 { // Windows has no Unix mode bits; %APPDATA% is per-user
 		t.Errorf("mode %v", st.Mode())
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func TestIPC(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := os.Stat(filepath.Join(dir, ipcFile))
-	if st.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 { // Windows has no Unix mode bits; %APPDATA% is per-user
 		t.Errorf("ipc.json mode %v", st.Mode())
 	}
 	d, err := Client{Dir: dir}.Approve(Request{Client: "mcp:test", Action: "run", Keys: []string{"K"}})

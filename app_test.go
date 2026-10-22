@@ -380,9 +380,9 @@ func TestContrast(t *testing.T) {
 func TestFilters(t *testing.T) {
 	h := newHarness(t)
 	tt := h.tester(panelWidth)
-	tt.Key(ui.Alt, ui.KeyRight)
+	tt.Key(ui.Cmd, ui.Key2)
 	if h.filter != filterDue {
-		t.Fatalf("⌥→: filter %d", h.filter)
+		t.Fatalf("⌘2: filter %d", h.filter)
 	}
 	for _, k := range h.rows() {
 		if st := h.inv.StatusOf(k, h.clock); st.State == vault.OK && st.Pending == 0 {
@@ -399,8 +399,8 @@ func TestFilters(t *testing.T) {
 		}
 	}
 	tt.Frame()
-	tt.Key(ui.Alt, ui.KeyRight) // wraps around
+	tt.Key(ui.Cmd, ui.Key1)
 	if h.filter != filterAll || len(h.rows()) != len(h.inv.Keys) {
-		t.Errorf("wrap: filter %d, %d rows", h.filter, len(h.rows()))
+		t.Errorf("⌘1: filter %d, %d rows", h.filter, len(h.rows()))
 	}
 }

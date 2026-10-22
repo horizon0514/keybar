@@ -127,10 +127,12 @@ func (a *app) keysList(c *ui.Context) {
 		if k, ok := a.chosenKey(); ok {
 			a.openDetail(k.Name)
 		}
-	case c.Shortcut(ui.Alt, ui.KeyLeft):
-		a.setFilter(a.filter - 1)
-	case c.Shortcut(ui.Alt, ui.KeyRight):
-		a.setFilter(a.filter + 1)
+	case c.Shortcut(ui.Cmd, ui.Key1):
+		a.setFilter(filterAll)
+	case c.Shortcut(ui.Cmd, ui.Key2):
+		a.setFilter(filterDue)
+	case c.Shortcut(ui.Cmd, ui.Key3):
+		a.setFilter(filterDenied)
 	case c.Shortcut(ui.Cmd, ui.KeyN):
 		a.openAdd()
 	case c.Shortcut(ui.Cmd, ui.KeyR):
@@ -223,7 +225,7 @@ func (a *app) mainView(c *ui.Context, k ink) {
 		if a.page == pageDetail {
 			a.hintBar(c, k, left, hint("⌘R", "轮换", "⌘C", "复制值", "⌘⌫", "删除", "esc", "返回列表"))
 		} else {
-			a.hintBar(c, k, left, hint("↑↓", "选择", "↵", "详情", "⌘R", "轮换", "⌘N", "添加", "⌥←→", "筛选", "⌘/", "快捷键"))
+			a.hintBar(c, k, left, hint("↑↓", "选择", "↵", "详情", "⌘R", "轮换", "⌘N", "添加", "⌘1–3", "筛选", "⌘/", "快捷键"))
 		}
 	})
 	if open && a.page == pageDetail {
@@ -299,7 +301,7 @@ func (a *app) tabs(c *ui.Context, k ink) {
 				bg, fg, w = k.chosen, k.link, 600
 			}
 			ui.Box(c.Key(n)).Padding(4, 10).Radius(7).Background(bg).Cursor(ui.CursorPointer).
-				Label(n).Tooltip(hk("⌥←→")).OnClick(func() { a.setFilter(i) }).Children(func() {
+				Label(n).Tooltip(hk(fmt.Sprintf("⌘%d", i+1))).OnClick(func() { a.setFilter(i) }).Children(func() {
 				ui.Text(c, n).FontSize(12).FontWeight(w).TextColor(fg).SingleLine()
 			})
 		}
@@ -1145,7 +1147,7 @@ func (a *app) cheatsheet(c *ui.Context, k ink) {
 		{"列表", "直接打字", "搜索名称、说明、平台、项目"},
 		{"", "↑ ↓", "选择（右侧是它的详情）"},
 		{"", "↵", "打开详情：勾选平台、添加平台、删除"},
-		{"", "⌥← ⌥→", "全部 / 需处理 / 代理禁用"},
+		{"", "⌘1 ⌘2 ⌘3", "全部 / 需处理 / 代理禁用"},
 		{"", "⌘N", "添加密钥"},
 		{"", "⌘R", "轮换选中的密钥"},
 		{"", "⌘C", "复制值（30 秒后清除剪贴板）"},
