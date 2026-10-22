@@ -5,10 +5,13 @@
 # add / ls / get / run / rotate / done / rm on the command line, import
 # with name conflicts, keys run finding a project's keys, connecting
 # agents, and an MCP agent's request approved in the running app with the
-# keyboard.
+# keyboard; 自动录入: keys scan --import --clean, keys run asking at the
+# terminal for a missing key, an agent's approval with a key pasted in,
+# and a key copied to the clipboard saved from the panel.
 # Only dummy values; the environment is cleared, so nothing from the
 # caller's environment reaches the app, the CLI or the commands they run.
-# Needs xvfb, dbus, gnome-keyring, openbox, xdotool, imagemagick.
+# Needs xvfb, dbus, gnome-keyring, openbox, xdotool, imagemagick, script
+# (util-linux); xclip for the clipboard.
 set -euo pipefail
 bin=$(realpath "$1"); shots=$(realpath -m "${2:-build/e2e}")
 if [ "${3:-}" != --inside ]; then
@@ -141,6 +144,78 @@ has "$out" "new-value-ok" "钥匙串里是新值"
 grep -rlF -- "$V1" "$KEYBAR_DIR" && bad "数据目录里出现了旧值" || ok "数据目录里没有旧值"
 grep -rlF -- "$V2" "$KEYBAR_DIR" && bad "数据目录里出现了新值" || ok "数据目录里没有新值"
 grep -rlF -e "$V3" -e "$V4" "$KEYBAR_DIR" && bad "数据目录里出现了导入的值" || ok "数据目录里没有导入的值"
+
+echo "自动录入：扫描本机、运行时补录、剪贴板"
+F=E2eQx7Lp2Wm9Vb4Nr8Ty3Hs6Jc1Fg5Zu0   # 33 characters of filler: key-shaped dummies, never real
+E_OPENAI="sk-proj-$F$F"; E_GH="ghp_${F}AB"; E_GROQ="gsk_$F$F"; E_ANT="sk-ant-api03-$F$F"; E_HF="hf_$F"; E_XAI="xai-$F$F"
+mkdir -p "$HOME/code/shop/node_modules/x" "$HOME/projects/tool/.git"
+printf 'PORT=3000\nOPENAI_API_KEY=%s\nDB_PASSWORD=e2e-hunter2-dummy\n' "$E_OPENAI" >"$HOME/code/shop/.env"
+printf 'OPENAI_API_KEY=your-key\n' >"$HOME/code/shop/.env.example"
+printf 'X_TOKEN=%s\n' "$E_HF" >"$HOME/code/shop/node_modules/x/.env"
+printf 'export PATH="$HOME/bin:$PATH"\nexport GITHUB_TOKEN=%s\nexport EDITOR=vim\n' "$E_GH" >"$HOME/.zshrc"
+out=$(keys scan 2>&1)
+has "$out" "~/code/shop/.env" "scan 找到项目的 .env"
+has "$out" "~/.zshrc" "scan 找到 shell 配置里的 export"
+has "$out" "sk-proj-… 74 位" "scan 只显示前缀和长度"
+has "$out" "· PORT" "PORT 不勾选"
+hasnt "$out" "$E_OPENAI" "scan 输出里没有 OpenAI 值"; hasnt "$out" "$E_GH" "没有 GitHub 值"; hasnt "$out" "hunter2" "没有密码"
+hasnt "$out" "node_modules" "跳过 node_modules"; hasnt "$out" ".env.example" "跳过 .env.example"
+out=$(keys scan --import --clean names 2>&1)
+has "$out" "备份在 ~/code/shop/.env.keybar-backup" "导入后移除明文，先备份"
+out=$(keys ls); has "$out" OPENAI_API_KEY "导入了 .env 的 key"; has "$out" GITHUB_TOKEN "导入了 .zshrc 的 export"
+keys show PORT >/dev/null 2>&1 && bad "PORT 被导入了" || ok "PORT 没有导入"
+grep -qxF 'OPENAI_API_KEY=' "$HOME/code/shop/.env" && grep -qxF 'PORT=3000' "$HOME/code/shop/.env" && ok ".env 只留变量名" || { bad ".env 清理"; cat "$HOME/code/shop/.env"; }
+grep -qF '# moved to KeyBar: GITHUB_TOKEN' "$HOME/.zshrc" && ! grep -qF "$E_GH" "$HOME/.zshrc" && grep -qF 'export EDITOR=vim' "$HOME/.zshrc" && ok ".zshrc 的 export 改为注释，其余不动" || { bad ".zshrc 清理"; cat "$HOME/.zshrc"; }
+grep -qF "$E_OPENAI" "$HOME/code/shop/.env.keybar-backup" && ok "备份是原文件" || bad "备份"
+out=$(keys audit -n 30); has "$out" "扫描本机" "扫描记在访问记录里"; has "$out" "移除明文" "移除明文记在访问记录里"
+grep -rlF -e "$E_OPENAI" -e "$E_GH" "$KEYBAR_DIR" && bad "数据目录里出现了扫描的值" || ok "数据目录里没有扫描的值"
+
+mkdir -p "$HOME/code/fill/.git"; printf 'GROQ_API_KEY=\nPORT=3000\nNODE_ENV=dev\n' >"$HOME/code/fill/.env.example"
+( cd "$HOME/code/fill" && { sleep 2; printf '%s\n' "$E_GROQ"; sleep 2; } | timeout 30 script -qec "keys run -- sh -c 'echo child-got-\${#GROQ_API_KEY}'" /dev/null ) >"$shots/missing-key-tty.raw" 2>&1 || true
+tr -d '\r' <"$shots/missing-key-tty.raw" >"$shots/missing-key-tty.txt"; rm -f "$shots/missing-key-tty.raw"
+out=$(cat "$shots/missing-key-tty.txt")
+has "$out" "GROQ_API_KEY 不在 KeyBar，粘贴值保存，回车跳过" "终端里提示补上缺的 key"
+has "$out" "已存入 GROQ_API_KEY（gsk_… 70 位）" "补上的存进钥匙串"
+has "$out" "child-got-70" "补上的值注入了子进程"
+hasnt "$out" "$E_GROQ" "终端记录里没有值（输入不回显）"
+hasnt "$out" "PORT 不在" "PORT、NODE_ENV 不问"
+
+mkdir -p "$HOME/code/agent/.git"; printf 'XAI_API_KEY=\nPORT=1\n' >"$HOME/code/agent/.env.example"
+fill() { # paste a value into the approval's field, then Enter
+  sleep 2.5
+  w=$(xdotool search --onlyvisible --name KeyBar | head -1 || true); [ -n "$w" ] || { echo "  (没有可见的面板)"; return 0; }
+  xdotool windowactivate --sync "$w" >/dev/null 2>&1 || true
+  sleep 0.3; xdotool type --delay 8 "$1"; sleep 0.5
+  import -window "$w" "$shots/e2e-missing-key.png"
+  xdotool key Return
+}
+req='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"e2e-agent","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_with_secrets","arguments":{"command":["sh","-c","echo xai-len:${#XAI_API_KEY}"],"cwd":"'"$HOME/code/agent"'","reason":"e2e 补录"}}}'
+fill "$E_XAI" &
+out=$( { printf '%s\n' "$req"; sleep 10; } | timeout 30 keys mcp || true)
+wait $! || true
+has "$out" "xai-len:70" "代理请求里粘贴补上的 key 一起注入"
+hasnt "$out" "$E_XAI" "MCP 输出里没有补上的值"
+keys show XAI_API_KEY >/dev/null 2>&1 && ok "补上的存进钥匙串" || bad "XAI_API_KEY 没存上"
+
+if command -v xclip >/dev/null; then
+  printf '%s' "$E_ANT" | xclip -selection clipboard
+  sleep 4
+  xdotool key alt+shift+k; sleep 1.5
+  w=$(xdotool search --onlyvisible --name KeyBar | head -1 || true)
+  if [ -n "$w" ]; then
+    xdotool windowactivate --sync "$w" >/dev/null 2>&1 || true
+    import -window "$w" "$shots/e2e-clipboard.png"
+    sleep 0.3; xdotool key ctrl+s; sleep 1; xdotool key Escape
+  fi
+  out=$(keys ls); has "$out" ANTHROPIC_API_KEY "剪贴板里的 key 一键保存"
+  out=$(keys audit -n 5); has "$out" "从剪贴板保存" "保存记在访问记录里"
+  grep -rlF -- "$E_ANT" "$KEYBAR_DIR" "$shots/app.log" && bad "剪贴板内容写进了文件" || ok "剪贴板内容没有写进任何文件"
+  printf 'not a key' | xclip -selection clipboard
+else
+  echo "  (没有 xclip：跳过剪贴板)"
+fi
 
 echo "删除"
 keys rm E2E_TOKEN -y >/dev/null; keys rm E2E_TOKEN_E2E_APP -y >/dev/null; keys rm E2E_NEW -y >/dev/null

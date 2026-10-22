@@ -15,6 +15,12 @@ var NameFiles = []string{".env.example", ".env.sample", ".env.template", ".env",
 
 // Dirs are dir and its parents up to the git repository's root (the
 // folder with .git); dir alone outside a repository.
+// Root is the project's folder for dir: the git root, else dir.
+func Root(dir string) string {
+	ds := Dirs(dir)
+	return ds[len(ds)-1]
+}
+
 func Dirs(dir string) []string {
 	dir, _ = filepath.Abs(dir)
 	var out []string

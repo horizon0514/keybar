@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"keybar/project"
+	"keybar/secret"
 	"keybar/vault"
 )
 
@@ -60,7 +61,16 @@ type Item struct {
 	State   State
 	Choice  Choice
 	NewName string // for Rename
-	value   []byte
+	// Skip: left out (unchecked in a scan's list).
+	Skip bool
+	// Likely: the value looks like a secret (a scan checks these).
+	Likely bool
+	// Masked is the value as its prefix and length: sk-… 51 位.
+	Masked string
+	// Elsewhere: another file of the same scan has this name; Same then
+	// means the same value as there.
+	Elsewhere string
+	value     []byte
 }
 
 // Repeated tells whether the variable is on several lines of the file.
@@ -68,6 +78,9 @@ func (it *Item) Repeated() bool { return len(it.Lines) > 1 }
 
 // Target is the key the item ends up in, or "" when nothing is imported.
 func (it *Item) Target() string {
+	if it.Skip {
+		return ""
+	}
 	switch it.State {
 	case New, Same:
 		return it.Key
@@ -136,6 +149,11 @@ func Read(v *vault.Vault, path, proj, prefix string) (*Plan, error) {
 	if len(vars) == 0 {
 		return nil, errors.New("文件里没有变量")
 	}
+	return FromVars(v, abs, proj, prefix, vars)
+}
+
+// FromVars is Read of variables read elsewhere (a shell's rc file).
+func FromVars(v *vault.Vault, abs, proj, prefix string, vars []project.Var) (*Plan, error) {
 	if proj == "" {
 		proj = ProjectName(abs)
 	}
@@ -150,6 +168,7 @@ func Read(v *vault.Vault, path, proj, prefix string) (*Plan, error) {
 		}
 		it.Line, it.value = x.Line, []byte(x.Value)
 		it.Lines = append(it.Lines, x.Line)
+		it.Likely, it.Masked = secret.Likely(x.Name, x.Value), secret.Mask(x.Value)
 	}
 	inv, err := v.Inventory()
 	if err != nil {
@@ -271,8 +290,8 @@ func Suggest(inv *vault.Inventory, name, proj string, taken []string) string {
 
 // Result is what Apply did.
 type Result struct {
-	Added, Same, Overwritten, Renamed, Kept, Empty int
-	Failed                                         []string // "NAME：why"
+	Added, Same, Overwritten, Renamed, Kept, Empty, Unchecked int
+	Failed                                                    []string // "NAME：why"
 	// Env maps the file's variables to the keys holding their values;
 	// Mapped, those whose key has another name (renamed or prefixed),
 	// which a keys.toml must record for keys run to find them.
@@ -303,6 +322,7 @@ func (r Result) Summary() string {
 	add(r.Same, "已有相同值")
 	add(r.Kept, "保留现有")
 	add(r.Empty, "空值跳过")
+	add(r.Unchecked, "未勾选")
 	add(len(r.Failed), "失败")
 	if len(s) == 0 {
 		return "没有导入任何密钥"
@@ -325,6 +345,10 @@ func (p *Plan) Apply(v *vault.Vault) Result {
 	}
 	fail := func(it *Item, name string, err error) { r.Failed = append(r.Failed, name+"："+err.Error()) }
 	for _, it := range p.Items {
+		if it.Skip {
+			r.Unchecked++
+			continue
+		}
 		switch it.State {
 		case Empty:
 			r.Empty++
@@ -417,4 +441,92 @@ func shortPath(p string) string {
 		return "~" + p[len(home):]
 	}
 	return p
+}
+
+// Pending is what the earlier files of a scan will add: name → value.
+type Pending map[string][]byte
+
+// Against marks the plan's new names that an earlier file of the same
+// scan adds too: the same value is that one (Same); another is imported
+// under NAME_PROJECT by default. It then records the plan's own new names.
+func (p *Plan) Against(pend Pending, from map[string]string, v *vault.Vault) {
+	inv, _ := v.Inventory()
+	for _, it := range p.Items {
+		if it.State != New || it.Skip {
+			continue
+		}
+		old, ok := pend[it.Key]
+		if !ok {
+			continue
+		}
+		it.Elsewhere = from[it.Key]
+		if bytes.Equal(old, it.value) {
+			it.State = Same
+			continue
+		}
+		it.State, it.Choice = Conflict, Rename
+		if inv != nil {
+			it.NewName = Suggest(inv, it.Key, p.Project, append(p.taken(it), keysOf(pend)...))
+		}
+	}
+	for _, it := range p.Items {
+		if it.State == New && !it.Skip {
+			pend[it.Key] = it.value
+			from[it.Key] = p.Path
+		}
+	}
+}
+
+func keysOf(m Pending) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// Recheck brings the states up to date with KeyBar just before Apply,
+// after earlier files of a scan were imported: a name now there with
+// the same value is Same, with another a Conflict (renamed by default);
+// one no longer there is New.
+func (p *Plan) Recheck(v *vault.Vault) error {
+	inv, err := v.Inventory()
+	if err != nil {
+		return err
+	}
+	for _, it := range p.Items {
+		if it.Skip || it.State == Empty {
+			continue
+		}
+		_, there := inv.Find(it.Key)
+		switch {
+		case !there && (it.State == Same || it.State == Conflict && it.Elsewhere != ""):
+			it.State = New
+		case there && it.State == New, there && it.State == Same && it.Elsewhere != "":
+			same, err := sameValue(v, it.Key, it.value)
+			if err != nil {
+				return err
+			}
+			if same {
+				it.State = Same
+			} else {
+				it.State, it.Choice = Conflict, Rename
+				if it.NewName == "" {
+					it.NewName = Suggest(inv, it.Key, p.Project, p.taken(it))
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// Valued are the items whose value is not empty.
+func (p *Plan) Valued() []*Item {
+	var out []*Item
+	for _, it := range p.Items {
+		if it.State != Empty {
+			out = append(out, it)
+		}
+	}
+	return out
 }

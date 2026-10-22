@@ -123,7 +123,16 @@ type Var struct {
 
 // ParseDotenv reads a .env file: NAME=value lines, with export, quotes and
 // comments as dotenv takes them.
-func ParseDotenv(b []byte) ([]Var, error) {
+func ParseDotenv(b []byte) ([]Var, error) { return parseDotenv(b, true) }
+
+// ParseDotenvLoose is ParseDotenv passing over the lines it cannot read,
+// for files found by a scan.
+func ParseDotenvLoose(b []byte) []Var {
+	out, _ := parseDotenv(b, false)
+	return out
+}
+
+func parseDotenv(b []byte, strict bool) ([]Var, error) {
 	var out []Var
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
@@ -137,10 +146,16 @@ func ParseDotenv(b []byte) ([]Var, error) {
 		line = strings.TrimPrefix(line, "export ")
 		name, val, ok := strings.Cut(line, "=")
 		if !ok {
+			if !strict {
+				continue
+			}
 			return nil, fmt.Errorf("第 %d 行不是 NAME=value", n)
 		}
 		name = strings.TrimSpace(name)
 		if !envRE.MatchString(name) {
+			if !strict {
+				continue
+			}
 			return nil, fmt.Errorf("第 %d 行：变量名 %q 不合法", n, name)
 		}
 		val = strings.TrimSpace(val)

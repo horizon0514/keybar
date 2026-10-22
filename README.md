@@ -6,6 +6,7 @@
 - **不用写配置**：密钥名就是环境变量名。`keys run` 看项目的 `.env.example` / `.env` 里有哪些变量名，KeyBar 里有同名的就注入。
 - **一键连接 AI 代理**：设置里点一下（或 `keys connect`），KeyBar 就加进已安装的 AI 代理和编辑器的 MCP 设置（Claude Code、Cursor、Codex、Gemini CLI、opencode、pi 等 19 种，见[下表](#支持的代理)）。代理用 `run_with_secrets` 带着 key 跑命令，输出里的值被替换成 `[REDACTED:NAME]`。每次使用都要你在菜单栏里批准，全部记日志。
 - **导入 `.env`**：同名但值不同时逐个决定：保留现有、覆盖（记为一次轮换）、或改名导入。
+- **自动录入**：一键扫描本机的 `.env` 和 shell 配置里的 `export`，勾选导入（可选导入后从文件移除明文，先备份）；复制了认得出的 key（OpenAI、Anthropic、GitHub、AWS、Stripe……）面板顶上提示保存；`keys run` 或代理缺 key 时当场粘贴补上；项目里出现新的 `.env` 时提醒导入。见[自动录入](#自动录入)。
 - **菜单栏 / 托盘**：键盘优先的两栏面板（左边清单、右边详情，`⌘1` `⌘2` `⌘3` 切换“全部 / 需处理 / 代理禁用”），批准请求、查看清单、轮换；每天提醒超期和快到期的 key，图标上有角标。
 - **轮换清单**：换新值后自动更新 GitHub Actions secrets 和 Vercel 环境变量，其余平台（Railway、TiDB Cloud、`.env`……）列成清单逐个勾掉。
 
@@ -19,7 +20,11 @@
 |---|---|---|
 | ![代理](docs/screenshots/settings-agents-light.png) | ![导入](docs/screenshots/import-conflicts-light.png) | ![深色](docs/screenshots/list-dark.png) |
 
-更多：[轮换](docs/screenshots/rotate-light.png) · [快捷键](docs/screenshots/shortcuts-light.png) · [搜索无结果](docs/screenshots/empty-search-dark.png) · [添加](docs/screenshots/add-light.png) · [导入](docs/screenshots/import-light.png)。
+| 扫描本机 | 剪贴板里的 key | 代理缺 key 时当场补上 |
+|---|---|---|
+| ![扫描](docs/screenshots/scan-light.png) | ![剪贴板](docs/screenshots/clipboard-notice-light.png) | ![补录](docs/screenshots/approval-missing-light.png) |
+
+更多：[新 .env 提醒](docs/screenshots/env-notice-light.png) · [设置 › 自动录入](docs/screenshots/settings-auto-light.png) · [轮换](docs/screenshots/rotate-light.png) · [快捷键](docs/screenshots/shortcuts-light.png) · [搜索无结果](docs/screenshots/empty-search-dark.png) · [添加](docs/screenshots/add-light.png) · [导入](docs/screenshots/import-light.png)。
 
 Linux（Xvfb + openbox）实机截图：[列表](docs/screenshots/linux-list.png) · [详情](docs/screenshots/linux-detail.png) · [端到端测试里 MCP 请求的批准](docs/screenshots/linux-e2e-approval.png) · [命令行请求（输出不脱敏的提醒）](docs/screenshots/linux-e2e-cli-approval.png)。
 
@@ -96,6 +101,38 @@ keys disconnect cursor
 >
 > 代理拿到：`injected: DATABASE_URL, OPENAI_API_KEY` + 退出码 + 输出（值都是 `[REDACTED:…]`）
 
+## 自动录入
+
+**扫描本机**（设置 › 自动录入 ›「扫描本机…」、托盘菜单，或 `keys scan`）：在 `~/code`、`~/projects`、`~/dev`、`~/src`、`~/workspace`、`~/Documents/GitHub` 和主目录的第一层里找 `.env`、`.env.local`、`.env.*`（不含 `.example` / `.sample` / `.template`），跳过 `node_modules`、`.git`、`vendor`、`build`、`Library` 等和隐藏目录；再看 `~/.zshrc`、`~/.zshenv`、`~/.zprofile`、`~/.bashrc`、`~/.bash_profile`、`~/.profile`、fish 的 `config.fish` 里写死值的 `export NAME=value`（`$VAR`、`$(…)` 这种不算）。位置可以在设置里改。
+
+结果按文件列成勾选清单，像密钥的已勾选：名字像（`*KEY*`、`*TOKEN*`、`*SECRET*`、`*PASSWORD*`、带密码的连接串），或值像（认得出的服务商格式、够长够乱），占位符（`your-key`、`changeme`、`<…>`）和 `PORT`、`NODE_ENV`、`NEXT_PUBLIC_*` 这类不算。值只显示前缀和长度（`sk-proj-… 164 位`）。重名的处理和导入一样：值相同跳过，值不同保留 / 覆盖 / 改名为 `NAME_项目名`；两个文件里同名不同值时，后一个默认改名。
+
+导入后可以按文件选择**移除明文**（默认不移除）：`.env` 可以注释掉、只留变量名（`NAME=`）或删除整行；shell 配置的 `export` 行改成 `# moved to KeyBar: NAME…` 注释。改之前原文件存为 `*.keybar-backup`（0600，含明文，确认无误后自己删），写入是原子的，文件模式不变；只移除已经在 KeyBar 里的（选了“保留现有”的不动）。
+
+```sh
+keys scan                              # 只列出，不导入
+keys scan --import                     # 导入打勾的（--all 全部，--on-conflict skip|overwrite|rename）
+keys scan --import --clean names       # 导入后移除明文：comment | names | delete（先备份）
+keys scan --roots ~/work,~/oss --no-rc # 换位置、不看 shell 配置
+keys scan --file ~/code/my-app/.env --import
+```
+
+**剪贴板**：应用开着时每秒看一次剪贴板的变化计数（macOS `NSPasteboard changeCount`，Windows `GetClipboardSequenceNumber`；Linux 没有计数，每 2 秒用 `wl-paste` 或 `xclip` 读一次，比较哈希）。复制了认得出格式的 key、而 KeyBar 里没有这个值时，面板顶上出现一行「发现 OpenAI key · 保存为 OPENAI_API_KEY」，名字可改，`⌘S` 保存、或忽略；两分钟后自动消失。剪贴板内容不写日志、不落盘，只在你保存时进钥匙串。密码管理器标记为隐藏 / 临时的内容（`org.nspasteboard.ConcealedType`、`TransientType`，Windows `ExcludeClipboardContentFromMonitorProcessing`，KDE `x-kde-passwordManagerHint`）一律不看。认得的格式：OpenAI、Anthropic、OpenRouter、DeepSeek、GitHub、GitLab、Google、AWS、Stripe、Slack、Vercel、Hugging Face、Groq、xAI、Perplexity、Replicate、npm、Supabase、SendGrid、Linear、Notion、Fireworks。设置里可以关。
+
+**缺 key 当场补上**：`keys run` 在终端里自动找变量时，项目要的、KeyBar 里没有的，逐个隐藏输入：
+
+```
+GROQ_API_KEY 不在 KeyBar，粘贴值保存，回车跳过（输入 - 以后不再问）：
+keys：已存入 GROQ_API_KEY（gsk_… 56 位）
+keys：注入 GROQ_API_KEY；KeyBar 里没有 NODE_ENV、PORT，跳过
+```
+
+代理（MCP `run_with_secrets`）或非交互的 `keys run` 请求时，批准面板里列出缺的变量，每个一个隐藏的粘贴框；粘贴的值由应用直接存进钥匙串（不经过代理和命令行），然后一起注入。`PORT`、`HOST`、`NODE_ENV`、`DEBUG`、`LOG_LEVEL` 这类明显不是密钥的不问；「不再询问」按项目记住（设置 › 自动录入里可恢复）。
+
+**新的 `.env`**：应用每 20 秒看一次扫描位置里 `.env` 的修改时间（不用文件监听，改动停下 3 秒后才算），新出现或改过、并且有 KeyBar 里没有的密钥时，面板顶上和托盘菜单提示「my-app/.env 有 3 个新 key · 导入」；「忽略此文件」以后不再提醒。设置里可以关。
+
+扫描、导入、移除明文、从剪贴板保存、补录都记在访问记录里（只有名字和文件路径）。
+
 ## 命令行
 
 ```sh
@@ -107,6 +144,7 @@ keys show TIDB_PROD_URL       # 详情、平台清单、轮换历史
 keys run -- npm run dev       # 自动注入项目要的
 keys run -e OPENAI_API_KEY -e DATABASE_URL=TIDB_PROD_URL --redact -- python app.py
 keys import .env --on-conflict rename --shred
+keys scan --import --clean comment   # 扫描本机的 .env 和 shell 配置，导入像密钥的，移除明文（先备份）
 keys rotate TIDB_PROD_URL     # 输入新值 → 自动同步 GitHub/Vercel → 列出要手动更新的平台
 keys done TIDB_PROD_URL p2    # 勾掉一项（all：全部）
 keys audit -n 20 --key TIDB_PROD_URL   # 访问记录
@@ -226,6 +264,7 @@ KeyBar keeps API keys in the OS keychain (macOS Keychain, Windows Credential Man
 - `keys import .env` moves a project's keys into the keychain; for names it already has with a different value it asks per key: keep, overwrite (recorded as a rotation) or import under a new name (`NAME_PROJECT` by default). Without a terminal, `--on-conflict skip|overwrite|rename` (default skip).
 - `keys run -- cmd` needs no config: it reads the variable names (never values) in `.env.example` / `.env.sample` / `.env` from the current folder up to the git root and injects the keys KeyBar holds under those names into that one process; `keys.toml` (names only) can map a variable to a differently named key. `--redact` scrubs values from its output.
 - `keys connect` (or Settings → AI 代理 → 连接) adds KeyBar's MCP server to every installed agent it knows — Claude Code, Cursor, Codex, Gemini CLI, Qwen Code, opencode, pi, Kimi Code, iFlow CLI, Crush, Amp, Goose, DeepSeek Harness, Claude Desktop, VS Code, Windsurf, Zed, Kiro, Cline — merging into their settings (JSONC comments kept, TOML/YAML edited in place) with a backup, refusing files it cannot parse. Agents call `run_with_secrets` (keys auto-detected from the project, output redacted); `list_keys` gives metadata only; `request_secret` (raw value) is discouraged. Every use needs approval in the menu bar app (allow once / allow N minutes / deny, per client and key), falling back to a system dialog, and is written to the access log.
+- Automatic entry: `keys scan [--import] [--clean comment|names|delete]` (or Settings → 自动录入 → 扫描本机) finds `.env` files under the usual code folders and literal `export NAME=value` lines in shell rc files, pre-checks the likely secrets (by name, provider format, entropy; placeholders and `PORT`-like names excluded), shows values only as prefix + length, imports with the same duplicate handling, and can take the plain text out of each opted-in file after a backup. The app also offers to save a key of a known provider format copied to the clipboard (change count polled; concealed/transient pasteboard types skipped; nothing logged or stored unless saved), lets `keys run` at a terminal and agents' approval popups paste a missing key on the spot (never-ask per project), and reminds you of new `.env` files with unmanaged keys.
 - `keys rotate` stores a new value, pushes it to GitHub Actions secrets and Vercel env vars, and lists every other place to update as a checklist.
 - A menu bar / tray app (keyboard first) shows the inventory, approves requests, and reminds you daily of overdue keys.
 - There is deliberately no `export`.

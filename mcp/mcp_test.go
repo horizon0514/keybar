@@ -293,3 +293,57 @@ func TestToolsPreferRun(t *testing.T) {
 		}
 	}
 }
+
+type fillGate struct {
+	v     *vault.Vault
+	asked []approval.Request
+	add   bool
+}
+
+func (g *fillGate) Ask(r approval.Request) approval.Decision {
+	g.asked = append(g.asked, r)
+	if !g.add {
+		return approval.Decision{Why: "denied"}
+	}
+	for _, n := range r.Missing {
+		_ = g.v.Add(vault.Key{Name: n}, []byte("dummy-pasted-"+n))
+	}
+	return approval.Decision{Allow: true, Added: r.Missing}
+}
+
+func TestRunFillsMissing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh")
+	}
+	s, _ := setup(t)
+	g := &fillGate{v: s.Vault, add: true}
+	s.Gate = g
+	repo := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	_ = os.WriteFile(filepath.Join(repo, ".env.example"), []byte("OPENAI_API_KEY=\nGROQ_API_KEY=\nPORT=3000\n"), 0o644)
+	got := call(t, s, tool(1, "run_with_secrets", map[string]any{"command": `echo "g=$GROQ_API_KEY"`, "cwd": repo}))
+	out := result(t, got[1]).Content[0].Text
+	if !strings.Contains(out, "g=[REDACTED:GROQ_API_KEY]") || !strings.Contains(out, "added to KeyBar by the user just now: GROQ_API_KEY") {
+		t.Errorf("%s", out)
+	}
+	r := g.asked[0]
+	if strings.Join(r.Keys, ",") != "OPENAI_API_KEY" || strings.Join(r.Missing, ",") != "GROQ_API_KEY" || r.Project != repo {
+		t.Errorf("%+v", r)
+	}
+	// only missing names: still offered; declined, the usual error
+	other := t.TempDir()
+	_ = os.WriteFile(filepath.Join(other, ".env.example"), []byte("REPLICATE_API_TOKEN=\n"), 0o644)
+	g.add = false
+	got = call(t, s, tool(2, "run_with_secrets", map[string]any{"command": "true", "cwd": other}))
+	if tr := result(t, got[2]); !tr.IsError || !strings.Contains(tr.Content[0].Text, "list_keys") || len(g.asked) != 2 || len(g.asked[1].Keys) != 0 {
+		t.Errorf("%+v %+v", tr, g.asked)
+	}
+	// a name the user said never to ask for in this project
+	set := vault.LoadSettings(s.Vault.Dir)
+	set.AddNeverAsk(other, "REPLICATE_API_TOKEN")
+	_ = vault.SaveSettings(s.Vault.Dir, set)
+	call(t, s, tool(3, "run_with_secrets", map[string]any{"command": "true", "cwd": other}))
+	if len(g.asked) != 2 {
+		t.Error("asked for a never-ask name")
+	}
+}

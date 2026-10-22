@@ -148,3 +148,36 @@ func TestSummarySep(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 }
+
+func TestGateMissing(t *testing.T) {
+	now := time.Now()
+	r := Request{Client: "mcp:x", Action: "run", Keys: []string{"A"}, Missing: []string{"B"}}
+	// granted before, names missing: the app is asked, the grant holds
+	app := &fixed{d: Decision{Why: "denied"}}
+	g := &Gate{App: app, Dialog: &fixed{err: ErrNoDialog}, Grants: &Grants{}, Now: func() time.Time { return now }}
+	g.Grants.Add("mcp:x", []string{"A"}, now.Add(time.Hour))
+	if d := g.Ask(r); !d.Allow || !d.Granted || app.n != 1 {
+		t.Errorf("%+v %d", d, app.n)
+	}
+	app.d = Decision{Allow: true, Added: []string{"B"}}
+	if d := g.Ask(r); !d.Allow || len(d.Added) != 1 {
+		t.Errorf("%+v", d)
+	}
+	// no app: the grant, without the missing
+	g.App = &fixed{err: ErrNoApp}
+	if d := g.Ask(r); !d.Allow || len(d.Added) != 0 {
+		t.Errorf("%+v", d)
+	}
+	// only missing names and no app: no dialog
+	dlg := &fixed{d: Decision{Allow: true}}
+	g2 := &Gate{App: &fixed{err: ErrNoApp}, Dialog: dlg}
+	if d := g2.Ask(Request{Client: "cli", Action: "run", Missing: []string{"B"}}); d.Allow || d.Why != "no-approver" || dlg.n != 0 {
+		t.Errorf("%+v", d)
+	}
+	// allowed for a while with a key added: the grant covers it too
+	g3 := &Gate{App: &fixed{d: Decision{Allow: true, For: time.Minute, Added: []string{"B"}}}, Grants: &Grants{}, Now: func() time.Time { return now }}
+	g3.Ask(r)
+	if !g3.Grants.Covers("mcp:x", []string{"A", "B"}, now) {
+		t.Error("added key not granted")
+	}
+}

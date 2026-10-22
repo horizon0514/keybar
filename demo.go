@@ -116,3 +116,28 @@ func demoRequest() approval.Request {
 	return approval.Request{ID: "demo", Client: "mcp:claude-code", Action: "run", Keys: []string{"DEEPSEEK_API_KEY", "TIDB_PROD_URL"},
 		Command: "go test ./... -run TestRealAPI", Cwd: "~/lb-bar", Reason: "跑一下真实 API 的集成测试"}
 }
+
+// Example keys for the scan, the clipboard and the run: shaped like the
+// providers' so that they are recognized, made of filler, never real.
+const (
+	demoOpenAI    = "sk-proj-Dm0Kx7Qp2Lw9Vb4Nr8Ty3Hs6Jc1Fg5Zu0Dm0Kx7Qp2Lw9Vb4Nr8T"
+	demoAnthropic = "sk-ant-api03-Dm0Kx7Qp2Lw9Vb4Nr8Ty3Hs6Jc1Fg5Zu0Dm0Kx7Qp2Lw9Vb4Nr8Ty3Hs6Jc1Fg5Zu0Dm0Kx7Qp2Lw9Vb4AA"
+	demoStripe    = "sk_" + "test_Dm0Kx7Qp2Lw9Vb4Nr8Ty3Hs6"
+	demoGitHub    = "ghp_Dm0Kx7Qp2Lw9Vb4Nr8Ty3Hs6Jc1Fg5Zu0Dm0K"
+	demoHF        = "hf_Dm0Kx7Qp2Lw9Vb4Nr8Ty3Hs6Jc1Fg5Zu0Dm"
+)
+
+// demoScanHome puts example projects and a shell file in the demo's home
+// folder, for 扫描本机.
+func demoScanHome(home string) {
+	put := func(body string, parts ...string) {
+		p := filepath.Join(append([]string{home}, parts...)...)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, []byte(body), 0o600)
+	}
+	put("PORT=3000\nNODE_ENV=development\nOPENAI_API_KEY="+demoOpenAI+"\nDATABASE_URL=postgres://app:Dm0Kx7Qp2Lw9@localhost:5432/app\n"+
+		"STRIPE_SECRET_KEY="+demoStripe+"\nDEEPSEEK_API_KEY=sk-example-deepseek-0000\n", "code", "my-app", ".env")
+	put("OPENAI_API_KEY="+demoOpenAI+"\nANTHROPIC_API_KEY="+demoAnthropic+"\nNEXT_PUBLIC_SITE_URL=http://localhost:3000\n", "code", "blog", ".env.local")
+	put("OPENAI_API_KEY=your-key-here\n", "code", "blog", ".env.example")
+	put("export PATH=\"$HOME/bin:$PATH\"\nexport GITHUB_TOKEN="+demoGitHub+"\nexport HF_TOKEN="+demoHF+"\nexport EDITOR=vim\n", ".zshrc")
+}

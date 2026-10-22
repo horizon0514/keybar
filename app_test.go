@@ -354,6 +354,45 @@ func TestScreenshots(t *testing.T) {
 		cs[1].Choice = importer.Overwrite
 		h.imp.chosen = 0
 	})
+	shot("scan", panelWidth, func(h *harness, tt *ui.Tester) {
+		demoScanHome(h.agents.Home)
+		h.openScan("")
+		h.run()
+		h.auto.scan.clean[filepath.Join(h.agents.Home, "code", "blog", ".env.local")] = true
+	})
+	shot("scan-rc", panelWidth, func(h *harness, tt *ui.Tester) {
+		demoScanHome(h.agents.Home)
+		h.openScan("")
+		h.run()
+		g := h.auto.scan.groups
+		h.auto.scan.groups = append(g[1:2:2], g[2])
+		h.auto.scan.clean[filepath.Join(h.agents.Home, "code", "my-app", ".env")] = true
+		h.auto.scan.mode[filepath.Join(h.agents.Home, "code", "my-app", ".env")] = 1
+		h.auto.scan.clean[filepath.Join(h.agents.Home, ".zshrc")] = true
+	})
+	shot("clipboard-notice", panelWidth, func(h *harness, tt *ui.Tester) { h.offerClip(demoAnthropic) })
+	shot("env-notice", panelWidth, func(h *harness, tt *ui.Tester) {
+		h.auto.envNotes = []envNote{{path: filepath.Join(h.agents.Home, "code", "my-app", ".env"), n: 3}}
+	})
+	shot("approval-missing", panelWidth, func(h *harness, tt *ui.Tester) {
+		r := approval.Request{ID: "demo", Client: "mcp:claude-code", Action: "run", Keys: []string{"OPENAI_API_KEY"},
+			Missing: []string{"ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "SENTRY_DSN"}, Project: "/Users/me/code/my-app",
+			Command: "npm run test:e2e", Cwd: "~/code/my-app", Reason: "跑端到端测试"}
+		p := &pending{req: r, at: h.clock.Add(-12 * time.Second), answer: make(chan approval.Decision, 1), fill: map[string]*string{}, never: map[string]bool{}}
+		for _, n := range r.Missing {
+			p.fill[n] = new(string)
+		}
+		*p.fill["ANTHROPIC_API_KEY"] = demoAnthropic
+		p.never["SENTRY_DSN"] = true
+		h.pending = []*pending{p}
+	})
+	shot("settings-auto", panelWidth, func(h *harness, tt *ui.Tester) {
+		home := h.agents.Home
+		h.settings.ScanRoots = []string{"~/code", "~/work"}
+		h.settings.IgnoredFiles = []string{filepath.Join(home, "code", "old-site", ".env")}
+		h.settings.AddNeverAsk(filepath.Join(home, "code", "my-app"), "SENTRY_DSN", "MAPBOX_TOKEN")
+		h.openTab(tabAuto)
+	})
 	shot("settings-general", panelWidth, func(h *harness, tt *ui.Tester) { h.openTab(tabGeneral) })
 	shot("shortcuts", panelWidth, func(h *harness, tt *ui.Tester) { h.cheat = true })
 	shot("empty-search", panelWidth, func(h *harness, tt *ui.Tester) { h.query = "nothing-matches" })

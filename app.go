@@ -29,16 +29,18 @@ const (
 	pageLog
 	pageSettings
 	pageImport
+	pageScan
 )
 
 // Settings' tabs.
 const (
 	tabGeneral = iota
 	tabAgents
+	tabAuto
 	tabAbout
 )
 
-var tabNames = []string{"通用", "AI 代理", "关于"}
+var tabNames = []string{"通用", "AI 代理", "自动录入", "关于"}
 
 // The list's filters.
 const (
@@ -54,6 +56,10 @@ type pending struct {
 	req    approval.Request
 	at     time.Time
 	answer chan approval.Decision
+	// for the names missing: the values pasted (kept only until
+	// answered), and those not to ask for again in the project
+	fill  map[string]*string
+	never map[string]bool
 }
 
 // importing is the import page: a .env file's path, then what it holds
@@ -105,6 +111,7 @@ type app struct {
 	pending []*pending
 
 	imp         importing
+	auto        autoState
 	agents      *agents.Env     // the agents on this computer
 	agentState  []agents.Status // as last read
 	showMissing bool            // the agents not installed, unfolded
@@ -305,6 +312,9 @@ func (a *app) back() {
 		}
 		a.page = pageList
 	case pageDetail, pageLog, pageSettings:
+		a.page = pageList
+	case pageScan:
+		a.auto.scan = scanning{}
 		a.page = pageList
 	default:
 		a.hide()
@@ -579,10 +589,13 @@ func (a *app) removeKey(name string) {
 // request is an agent's request, from the IPC server's goroutine: a grant
 // answers it, else the user, in the panel, within approval.Timeout.
 func (a *app) request(r approval.Request) approval.Decision {
-	if a.grants.Covers(r.Client, r.Keys, a.now()) {
+	if a.grants.Covers(r.Client, r.Keys, a.now()) && len(r.Missing) == 0 {
 		return approval.Decision{Allow: true, Granted: true}
 	}
-	p := &pending{req: r, answer: make(chan approval.Decision, 1)}
+	p := &pending{req: r, answer: make(chan approval.Decision, 1), fill: map[string]*string{}, never: map[string]bool{}}
+	for _, n := range r.Missing {
+		p.fill[n] = new(string)
+	}
 	a.post(func() {
 		p.at = a.now()
 		a.pending = append(a.pending, p)
@@ -613,10 +626,15 @@ func (a *app) decide(allow bool, timed bool) {
 	d := approval.Decision{Allow: allow, Why: "denied"}
 	if allow {
 		d.Why = ""
+		d.Added = a.saveFilled(p)
 		if timed {
 			d.For = time.Duration(a.settings.GrantMinutes) * time.Minute
-			a.grants.Add(p.req.Client, p.req.Keys, a.now().Add(d.For))
+			a.grants.Add(p.req.Client, append(append([]string(nil), p.req.Keys...), d.Added...), a.now().Add(d.For))
 		}
+	}
+	a.neverAsk(p)
+	for _, v := range p.fill {
+		*v = ""
 	}
 	p.answer <- d
 	a.drop(p)

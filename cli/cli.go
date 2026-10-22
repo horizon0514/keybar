@@ -27,6 +27,7 @@ import (
 	"keybar/redact"
 	"keybar/remote"
 	"keybar/runner"
+	"keybar/secret"
 	"keybar/vault"
 )
 
@@ -96,7 +97,7 @@ func commands() map[string]command {
 			return 0, nil
 		},
 		"add": add, "set": set, "get": get, "ls": ls, "list": ls, "show": show, "rm": rm, "edit": edit,
-		"run": runCmd, "import": importCmd, "rotate": rotate, "done": done, "undone": undone, "sync": syncCmd,
+		"run": runCmd, "import": importCmd, "scan": scanCmd, "rotate": rotate, "done": done, "undone": undone, "sync": syncCmd,
 		"audit": audit, "doctor": doctor, "mcp": mcpCmd, "config": config, "connect": connect, "disconnect": disconnect,
 		"export": func(e *Env, _ []string) (int, error) {
 			return 2, errors.New("没有 export：KeyBar 不把密钥批量写成明文文件。用 keys run -- <命令> 注入到程序，或 keys get NAME --reveal 读一个")
@@ -124,6 +125,9 @@ const usage = `keys — KeyBar 的命令行：密钥只存在系统钥匙串里�
                               只把需要的密钥注入子进程的环境变量；-e 指定时只注入这些
   keys import .env [--on-conflict ask|skip|overwrite|rename] [--project 名] [--prefix P] [--shred]
                               导入 .env；同名但值不同时：保留现有 / 覆盖（记为轮换）/ 改名导入
+  keys scan [--roots 目录,目录] [--file 文件]... [--no-rc] [--import [--all] [--on-conflict …] [--clean comment|names|delete]]
+                              扫描本机 .env 和 shell 配置里的 export，列出像密钥的（值只显示前缀和长度）；
+                              --import 导入打勾的，--clean 导入后从文件移除明文（先备份）
   keys connect [代理...] [--status]   连接 AI 代理（claude-code、cursor、codex、gemini、opencode、pi、zed…；默认全部已安装的）
   keys disconnect [代理...]   断开
   keys rotate NAME [--no-sync] [--note 说明]
@@ -386,22 +390,79 @@ func set(e *Env, args []string) (int, error) {
 // approveCLI asks for approval when the command line is used without a
 // terminal, as an agent's shell does.
 func (e *Env) approveCLI(action string, keys []string, command string, plain bool) (asked bool, err error) {
+	asked, _, err = e.approveFill(action, keys, command, plain, nil, "")
+	return asked, err
+}
+
+// approveFill is approveCLI offering, in the app, to add the missing
+// names; added are those saved there.
+func (e *Env) approveFill(action string, keys []string, command string, plain bool, missing []string, root string) (asked bool, added []string, err error) {
 	if e.terminal() || !vault.LoadSettings(e.Vault.Dir).CLIApproval {
-		return false, nil
+		return false, nil, nil
 	}
 	if e.Gate == nil {
-		return true, errors.New("非交互使用需要批准，但没有可用的批准方式")
+		if len(keys) == 0 {
+			return false, nil, nil
+		}
+		return true, nil, errors.New("非交互使用需要批准，但没有可用的批准方式")
 	}
 	cwd := ""
 	if e.Getwd != nil {
 		cwd, _ = e.Getwd()
 	}
-	d := e.Gate.Ask(approval.Request{Client: "cli", Action: action, Keys: keys, Command: command, Cwd: cwd, PID: os.Getpid(), Plain: plain})
-	_ = e.Vault.Log(vault.Event{Client: "cli", Action: action, Keys: keys, Decision: d.Code(), Detail: command})
-	if !d.Allow {
-		return true, fmt.Errorf("没有批准（非交互使用需要在 KeyBar 里批准；%s）", vault.DecisionZh(d.Code()))
+	d := e.Gate.Ask(approval.Request{Client: "cli", Action: action, Keys: keys, Command: command, Cwd: cwd, PID: os.Getpid(), Plain: plain, Missing: missing, Project: root})
+	if len(keys) == 0 {
+		// only an offer to add: no answer is no keys, and the command runs
+		return false, d.Added, nil
 	}
-	return true, nil
+	_ = e.Vault.Log(vault.Event{Client: "cli", Action: action, Keys: append(append([]string(nil), keys...), d.Added...), Decision: d.Code(), Detail: command})
+	if !d.Allow {
+		return true, nil, fmt.Errorf("没有批准（非交互使用需要在 KeyBar 里批准；%s）", vault.DecisionZh(d.Code()))
+	}
+	return true, d.Added, nil
+}
+
+// fillMissing asks at the terminal for the values of the missing names:
+// a value is saved into KeyBar, nothing skips, - never asks again here.
+func (e *Env) fillMissing(names []string, root string) (added []string) {
+	if e.Password == nil {
+		return nil
+	}
+	var never []string
+	for _, n := range names {
+		b, err := e.Password(fmt.Sprintf("%s 不在 KeyBar，粘贴值保存，回车跳过（输入 - 以后不再问）：", n))
+		if err != nil {
+			break
+		}
+		v := strings.TrimSpace(string(b))
+		switch v {
+		case "":
+			continue
+		case "-":
+			never = append(never, n)
+			continue
+		}
+		k := vault.Key{Name: n, Projects: []string{filepath.Base(root)}}
+		if p, ok := secret.Detect(v); ok {
+			k.Description = p.Name + " key"
+		}
+		if err := e.Vault.Add(k, []byte(v)); err != nil {
+			fmt.Fprintf(e.Stderr, "keys：%s 没存上：%v\n", n, err)
+			continue
+		}
+		added = append(added, n)
+		fmt.Fprintf(e.Stderr, "keys：已存入 %s（%s）\n", n, secret.Mask(v))
+	}
+	if len(added) > 0 {
+		_ = e.Vault.Log(vault.Event{Client: "cli", Action: "add", Keys: added, Decision: "ok", Detail: "keys run 补录"})
+	}
+	if len(never) > 0 {
+		s := vault.LoadSettings(e.Vault.Dir)
+		s.AddNeverAsk(root, never...)
+		_ = vault.SaveSettings(e.Vault.Dir, s)
+		fmt.Fprintf(e.Stderr, "keys：这个项目里不再询问 %s\n", strings.Join(never, "、"))
+	}
+	return added
 }
 
 func get(e *Env, args []string) (int, error) {
@@ -710,7 +771,8 @@ func runCmd(e *Env, args []string) (int, error) {
 	has := func(n string) bool { _, ok := inv.Find(n); return ok }
 	wd, _ := e.Getwd()
 	env := map[string]string{}
-	var skipped []string
+	var skipped, fill []string
+	root := ""
 	switch {
 	case len(envs) > 0 || *proj != "":
 		// Named: exactly these.
@@ -742,6 +804,17 @@ func runCmd(e *Env, args []string) (int, error) {
 			return 1, fmt.Errorf("%s 里写的 %s，KeyBar 里没有（keys add 添加，或改 keys.toml）", shortPath(r.Toml), strings.Join(r.TomlMissing, ", "))
 		}
 		env, skipped = r.Env, r.Missing
+		root = project.Root(wd)
+		fill = secret.Fillable(skipped, vault.LoadSettings(e.Vault.Dir).NeverAskIn(root))
+		if len(fill) > 0 && e.terminal() {
+			for _, n := range e.fillMissing(fill, root) {
+				env[n], skipped = n, slices.DeleteFunc(skipped, func(s string) bool { return s == n })
+			}
+			fill = nil
+			if inv, err = e.Vault.Inventory(); err != nil {
+				return 1, err
+			}
+		}
 	}
 	names := keysOf(env)
 	var missing []string
@@ -766,11 +839,26 @@ func runCmd(e *Env, args []string) (int, error) {
 	line := runner.Display(argv)
 	var values map[string][]byte
 	inject := map[string][]byte{}
-	if len(names) > 0 {
-		asked, err := e.approveCLI("run", names, line, !*redactOut)
+	asked := false
+	if len(names) > 0 || len(fill) > 0 {
+		var added []string
+		asked, added, err = e.approveFill("run", names, line, !*redactOut, fill, root)
 		if err != nil {
 			return 1, err
 		}
+		for _, n := range added {
+			if inv, _ := e.Vault.Inventory(); inv != nil {
+				if _, ok := inv.Find(n); ok {
+					env[n] = n
+					names = append(names, n)
+				}
+			}
+		}
+		if len(added) > 0 {
+			fmt.Fprintf(e.Stderr, "keys：在 KeyBar 里补上了 %s，一并注入\n", strings.Join(added, "、"))
+		}
+	}
+	if len(names) > 0 {
 		if values, err = e.Vault.Values(names); err != nil {
 			return 1, err
 		}
@@ -1153,7 +1241,8 @@ func audit(e *Env, args []string) (int, error) {
 
 func actionZh(a string) string {
 	if s, ok := map[string]string{"get": "读取", "reveal": "读明文", "run": "运行", "copy": "复制", "rotate": "轮换", "add": "添加",
-		"rm": "删除", "sync": "同步", "import": "导入", "list": "列出"}[a]; ok {
+		"rm": "删除", "sync": "同步", "import": "导入", "list": "列出", "scan": "扫描本机", "clipboard": "从剪贴板保存", "clean": "移除明文",
+		"connect": "连接代理", "disconnect": "断开代理"}[a]; ok {
 		return s
 	}
 	return a

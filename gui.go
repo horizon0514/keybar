@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"keybar/clip"
 	"log"
 	"math"
 	"os"
@@ -150,6 +151,14 @@ func (s *shell) ready() {
 	}
 	s.ipc = srv
 	s.setUpTray()
+	if demo {
+		demoScanHome(a.agents.Home)
+		a.startAuto(&clip.Fake{}, true) // never the real clipboard
+	} else if b, onMain, ok := clip.System(); ok {
+		a.startAuto(b, onMain)
+	} else {
+		a.startAuto(nil, false)
+	}
 	s.every(time.Minute, func() {
 		a.reload()
 		a.remind()
@@ -290,7 +299,7 @@ func (s *shell) trayChanged() {
 		s.tip = tip
 		s.tray.SetToolTip(tip)
 	}
-	sig := tip + "|" + s.shortcut
+	sig := tip + "|" + s.shortcut + "|" + a.autoSig()
 	if sig == s.menuSig {
 		return
 	}
@@ -299,10 +308,18 @@ func (s *shell) trayChanged() {
 	if n := len(a.pending); n > 0 {
 		items = append(items, &mygo.MenuItem{Label: fmt.Sprintf("⏳ %d 个代理请求待批准…", n), Click: func(*mygo.MenuItem, *mygo.Window) { s.show() }})
 	}
+	if f := a.auto.found; f != nil {
+		items = append(items, &mygo.MenuItem{Label: "保存剪贴板里的 " + f.provider + " key…", Click: func(*mygo.MenuItem, *mygo.Window) { a.page = pageList; s.show() }})
+	}
+	for _, n := range a.auto.envNotes {
+		path := n.path
+		items = append(items, &mygo.MenuItem{Label: fmt.Sprintf("%s 有 %d 个新 key · 导入…", envLabel(path), n.n), Click: func(*mygo.MenuItem, *mygo.Window) { a.openScan(path); s.show() }})
+	}
 	items = append(items, mygo.Separator(),
 		&mygo.MenuItem{Label: "打开 KeyBar", Accelerator: s.shortcut, Click: func(*mygo.MenuItem, *mygo.Window) { a.page = pageList; s.show() }},
 		&mygo.MenuItem{Label: "添加密钥…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openAdd(); s.show() }},
 		&mygo.MenuItem{Label: "导入 .env…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openImport(); s.show() }},
+		&mygo.MenuItem{Label: "扫描本机的密钥…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openScan(""); s.show() }},
 		&mygo.MenuItem{Label: "连接 AI 代理…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openTab(tabAgents); s.show() }},
 		&mygo.MenuItem{Label: "访问记录", Click: func(*mygo.MenuItem, *mygo.Window) { a.openLog(); s.show() }},
 		&mygo.MenuItem{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings(); s.show() }},

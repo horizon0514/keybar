@@ -109,6 +109,8 @@ func (a *app) view(c *ui.Context) {
 		a.settingsView(c, k)
 	case pageImport:
 		a.importView(c, k)
+	case pageScan:
+		a.scanView(c, k)
 	default:
 		a.mainView(c, k)
 	}
@@ -117,6 +119,10 @@ func (a *app) view(c *ui.Context) {
 // The list and the detail
 
 func (a *app) keysList(c *ui.Context) {
+	if a.auto.typing {
+		a.auto.typing = false
+		return
+	}
 	switch {
 	case c.Shortcut(0, ui.KeyEscape):
 		if a.query != "" {
@@ -196,6 +202,7 @@ func (a *app) mainView(c *ui.Context, k ink) {
 		a.header(c, k)
 		a.tabs(c, k)
 		ui.Divider(c)
+		a.autoNotices(c, k)
 		ui.Row(c.Key("panes")).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if wide || a.page == pageList {
 				col := ui.Column(c.Key("left")).MinHeight(0)
@@ -872,7 +879,8 @@ func (a *app) logView(c *ui.Context, k ink) {
 }
 
 var actionNames = map[string]string{"get": "读取", "reveal": "读明文", "run": "运行", "copy": "复制", "rotate": "轮换", "add": "添加",
-	"rm": "删除", "sync": "同步", "import": "导入", "list": "列出", "connect": "连接代理", "disconnect": "断开代理"}
+	"rm": "删除", "sync": "同步", "import": "导入", "list": "列出", "connect": "连接代理", "disconnect": "断开代理",
+	"scan": "扫描本机", "clipboard": "从剪贴板保存", "clean": "移除明文"}
 
 func (a *app) eventRow(c *ui.Context, k ink, ev vault.Event, keys bool) {
 	col := k.muted
@@ -940,18 +948,24 @@ func (a *app) approvalView(c *ui.Context, k ink) {
 		pageBody(c, "req", 14, func() {
 			who := approval.ClientName(r.Client)
 			what := "要用这些密钥运行一个命令"
-			if r.Action == "reveal" {
+			switch {
+			case r.Action == "reveal":
 				what = "要读取密钥的明文值"
+			case len(r.Keys) == 0:
+				what = "要运行一个命令，项目要的密钥 KeyBar 里还没有"
 			}
 			ui.Text(c, who+approval.Sep(who)+what).FontSize(17).FontWeight(650).LineHeight(1.35)
-			ui.Row(c.Key("keys")).Gap(6).Wrap().Children(func() {
-				for _, name := range r.Keys {
-					ui.Text(c.Key(name), name).FontSize(12).FontWeight(600).Font("monospace").Padding(2, 6).Radius(5).Background(k.line.Alpha(0.5))
-				}
-			})
+			if len(r.Keys) > 0 {
+				ui.Row(c.Key("keys")).Gap(6).Wrap().Children(func() {
+					for _, name := range r.Keys {
+						ui.Text(c.Key(name), name).FontSize(12).FontWeight(600).Font("monospace").Padding(2, 6).Radius(5).Background(k.line.Alpha(0.5))
+					}
+				})
+			}
 			if r.Command != "" {
 				ui.Text(c.Key("cmd"), r.Command).FontSize(12).Font("monospace").Padding(8, 10).Radius(8).Background(k.card).LineHeight(1.45).MaxLines(6).Selectable()
 			}
+			a.fillRows(c.Key("fill"), k, p)
 			ui.Column(c.Key("facts")).Gap(0).Children(func() {
 				field(c, k, "来自", r.Client)
 				if r.Cwd != "" {
@@ -976,11 +990,21 @@ func (a *app) approvalView(c *ui.Context, k ink) {
 				ui.Text(c, note).FontSize(12).TextColor(col).LineHeight(1.45).Grow(1).Shrink(1)
 			})
 			ui.Row(c.Key("btns")).Gap(8).Margin(6, 0, 0, 0).Children(func() {
+				if len(r.Keys) == 0 {
+					ui.Button(c.Key("deny"), "跳过  esc").OnClick(func() { a.decide(false, false) })
+					ui.Spacer(c)
+					ui.PrimaryButton(c.Key("once"), "保存并运行  "+hk("↵")).Disabled(p.filled() == 0).OnClick(func() { a.decide(true, false) })
+					return
+				}
+				once := "允许一次"
+				if p.filled() > 0 {
+					once = fmt.Sprintf("保存 %d 个并允许一次", p.filled())
+				}
 				ui.Button(c.Key("deny"), "拒绝  esc").OnClick(func() { a.decide(false, false) })
 				ui.Spacer(c)
 				ui.Button(c.Key("timed"), fmt.Sprintf("允许 %d 分钟  %s", a.settings.GrantMinutes, hk("⌘↵"))).
 					Tooltip("这段时间内这个代理再用这些密钥不再询问").OnClick(func() { a.decide(true, true) })
-				ui.PrimaryButton(c.Key("once"), "允许一次  "+hk("↵")).OnClick(func() { a.decide(true, false) })
+				ui.PrimaryButton(c.Key("once"), once+"  "+hk("↵")).OnClick(func() { a.decide(true, false) })
 			})
 		})
 		ui.Divider(c)
@@ -995,7 +1019,7 @@ func (a *app) settingsView(c *ui.Context, k ink) {
 		a.back()
 		return
 	}
-	for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3} {
+	for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4} {
 		if c.Shortcut(ui.Cmd, key) {
 			a.openTab(i)
 		}
@@ -1028,6 +1052,8 @@ func (a *app) settingsView(c *ui.Context, k ink) {
 						a.tabGeneral(c, k)
 					case tabAgents:
 						a.tabAgents(c, k)
+					case tabAuto:
+						a.tabAuto(c, k)
 					default:
 						a.tabAbout(c, k)
 					}
@@ -1035,9 +1061,9 @@ func (a *app) settingsView(c *ui.Context, k ink) {
 			})
 		})
 		ui.Divider(c)
-		hints := hint("⌘1–3", "切换", "⇥", "下一项", "↵", "确定", "esc", "返回")
+		hints := hint("⌘1–4", "切换", "⇥", "下一项", "↵", "确定", "esc", "返回")
 		if a.tab == tabAgents && a.toConnect() > 0 {
-			hints = hint("⌘↵", "全部连接", "⌘1–3", "切换", "esc", "返回")
+			hints = hint("⌘↵", "全部连接", "⌘1–4", "切换", "esc", "返回")
 		}
 		a.hintBar(c, k, a.toast, hints)
 	})

@@ -20,6 +20,7 @@ import (
 	"keybar/approval"
 	"keybar/project"
 	"keybar/runner"
+	"keybar/secret"
 	"keybar/vault"
 )
 
@@ -299,6 +300,11 @@ func (s *Server) listKeys(args json.RawMessage) any {
 
 // approve asks for keys: those the inventory has, which agents may use.
 func (s *Server) approve(action string, keys []string, command, cwd, reason string) (approval.Decision, string) {
+	return s.approveFill(action, keys, command, cwd, reason, nil, "")
+}
+
+// approveFill is approve offering, in the app, to add the names missing.
+func (s *Server) approveFill(action string, keys []string, command, cwd, reason string, fill []string, root string) (approval.Decision, string) {
 	inv, err := s.Vault.Inventory()
 	if err != nil {
 		return approval.Decision{}, err.Error()
@@ -323,8 +329,9 @@ func (s *Server) approve(action string, keys []string, command, cwd, reason stri
 		_ = s.Vault.Log(ev)
 		return approval.Decision{}, fmt.Sprintf("用户设置了不允许代理使用：%s。", strings.Join(denied, ", "))
 	}
-	d := s.Gate.Ask(approval.Request{Client: s.client(), Action: action, Keys: keys, Command: command, Cwd: cwd, Reason: reason, PID: os.Getpid()})
+	d := s.Gate.Ask(approval.Request{Client: s.client(), Action: action, Keys: keys, Command: command, Cwd: cwd, Reason: reason, PID: os.Getpid(), Missing: fill, Project: root})
 	ev.Decision = d.Code()
+	ev.Keys = append(append([]string(nil), keys...), d.Added...)
 	_ = s.Vault.Log(ev)
 	if !d.Allow {
 		switch {
@@ -372,7 +379,8 @@ func (s *Server) runWithSecrets(args json.RawMessage) any {
 	for v, k := range a.Env {
 		env[v] = k
 	}
-	var notes []string
+	var notes, fill []string
+	var root, noKeys string
 	if len(env) == 0 {
 		dir := cwd
 		if dir == "" {
@@ -412,15 +420,17 @@ func (s *Server) runWithSecrets(args json.RawMessage) any {
 				miss = append(miss, n)
 			}
 		}
+		root = project.Root(dir)
+		fill = secret.Fillable(miss, vault.LoadSettings(s.Vault.Dir).NeverAskIn(root))
 		if len(miss) > 0 {
 			notes = append(notes, "not in KeyBar, skipped: "+strings.Join(miss, ", "))
 		}
-		if len(env) == 0 {
-			msg := fmt.Sprintf("在 %s 没找到可注入的密钥：这里到仓库根没有 .env.example / .env.sample / .env，或其中的变量名 KeyBar 里都没有。用 list_keys 看有哪些，再在 keys 里列出。", dir)
-			if len(notes) > 0 {
-				msg += "\n" + strings.Join(notes, "\n")
-			}
-			return text(msg, true)
+		noKeys = fmt.Sprintf("在 %s 没找到可注入的密钥：这里到仓库根没有 .env.example / .env.sample / .env，或其中的变量名 KeyBar 里都没有。用 list_keys 看有哪些，再在 keys 里列出。", dir)
+		if len(notes) > 0 {
+			noKeys += "\n" + strings.Join(notes, "\n")
+		}
+		if len(env) == 0 && len(fill) == 0 {
+			return text(noKeys, true)
 		}
 	}
 	for v := range env {
@@ -435,8 +445,43 @@ func (s *Server) runWithSecrets(args json.RawMessage) any {
 		}
 	}
 	slices.Sort(names)
-	if _, msg := s.approve("run", names, line, cwd, a.Reason); msg != "" {
+	d, msg := s.approveFill("run", names, line, cwd, a.Reason, fill, root)
+	if msg != "" && (len(names) > 0 || len(d.Added) == 0) {
+		if len(names) == 0 && d.Why != "no-approver" && !strings.HasPrefix(d.Why, "error") {
+			msg = noKeys // only an offer to add, and nothing was added
+		}
 		return text(msg, true)
+	}
+	if len(d.Added) > 0 {
+		inv, err := s.Vault.Inventory()
+		if err != nil {
+			return text(err.Error(), true)
+		}
+		for _, n := range d.Added {
+			if _, ok := inv.Find(n); ok && validEnv(n) {
+				env[n] = n
+				names = append(names, n)
+			}
+		}
+		slices.Sort(names)
+		for i, note := range notes {
+			if !strings.HasPrefix(note, "not in KeyBar") {
+				continue
+			}
+			var rest []string
+			for _, n := range strings.Split(strings.TrimPrefix(note, "not in KeyBar, skipped: "), ", ") {
+				if !slices.Contains(d.Added, n) {
+					rest = append(rest, n)
+				}
+			}
+			notes[i] = "added to KeyBar by the user just now: " + strings.Join(d.Added, ", ")
+			if len(rest) > 0 {
+				notes[i] += "\nnot in KeyBar, skipped: " + strings.Join(rest, ", ")
+			}
+		}
+	}
+	if len(names) == 0 {
+		return text(noKeys, true)
 	}
 	values, err := s.Vault.Values(names)
 	if err != nil {

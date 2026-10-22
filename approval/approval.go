@@ -24,6 +24,11 @@ type Request struct {
 	Reason  string   `json:"reason,omitempty"` // what the agent says it needs them for
 	PID     int      `json:"pid,omitempty"`
 	Plain   bool     `json:"plain,omitempty"` // for run: the output is not redacted (keys run without --redact)
+	// Missing: for run, the variables the project needs that KeyBar does
+	// not have; the app offers to add them (values pasted there, never
+	// sent). Project is the project's folder, for "never ask".
+	Missing []string `json:"missing,omitempty"`
+	Project string   `json:"project,omitempty"`
 }
 
 // Decision is the user's answer.
@@ -32,6 +37,9 @@ type Decision struct {
 	For     time.Duration `json:"for,omitempty"` // 0: this once
 	Why     string        `json:"why,omitempty"` // denied, timeout, no-approver…
 	Granted bool          `json:"granted,omitempty"`
+	// Added: of the Missing, the names the user saved into KeyBar just
+	// now, to be injected too.
+	Added []string `json:"added,omitempty"`
 }
 
 // Code is the decision for the access log.
@@ -62,10 +70,17 @@ func (r Request) Summary() string {
 	if len([]rune(cmd)) > 80 {
 		cmd = string([]rune(cmd)[:79]) + "…"
 	}
-	if r.Plain {
-		return fmt.Sprintf("%s%s请求用 %s 运行（输出不脱敏）：%s", who, Sep(who), keys, cmd)
+	if keys == "" {
+		keys = "密钥"
 	}
-	return fmt.Sprintf("%s%s请求用 %s 运行：%s", who, Sep(who), keys, cmd)
+	miss := ""
+	if len(r.Missing) > 0 {
+		miss = fmt.Sprintf("（缺 %s，可在这里补上）", strings.Join(r.Missing, "、"))
+	}
+	if r.Plain {
+		return fmt.Sprintf("%s%s请求用 %s 运行（输出不脱敏）%s：%s", who, Sep(who), keys, miss, cmd)
+	}
+	return fmt.Sprintf("%s%s请求用 %s 运行%s：%s", who, Sep(who), keys, miss, cmd)
 }
 
 // ClientName shows a client: "mcp:claude-code" as "Claude Code".

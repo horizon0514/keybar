@@ -32,7 +32,10 @@ func (g *Gate) Ask(r Request) Decision {
 	if g.Grants == nil {
 		g.Grants = &Grants{}
 	}
-	if g.Grants.Covers(r.Client, r.Keys, g.now()) {
+	// Granted before: no question, unless keys are missing, which only
+	// the app can take (the dialog has no field to paste into).
+	covered := g.Grants.Covers(r.Client, r.Keys, g.now())
+	if covered && len(r.Missing) == 0 {
 		return Decision{Allow: true, Granted: true}
 	}
 	app := g.App
@@ -40,6 +43,14 @@ func (g *Gate) Ask(r Request) Decision {
 		app = Client{Dir: g.Dir}
 	}
 	d, err := app.Approve(r)
+	if covered {
+		// whatever was answered about the missing ones, the rest stays granted
+		return Decision{Allow: true, Granted: true, Added: d.Added}
+	}
+	// Nothing to allow but missing names, and no app to paste them into.
+	if errors.Is(err, ErrNoApp) && len(r.Keys) == 0 {
+		return Decision{Why: "no-approver"}
+	}
 	if errors.Is(err, ErrNoApp) && !g.NoDialog {
 		dlg := g.Dialog
 		if dlg == nil {
@@ -55,7 +66,7 @@ func (g *Gate) Ask(r Request) Decision {
 		return Decision{Why: why}
 	}
 	if d.Allow && d.For > 0 && !d.Granted {
-		g.Grants.Add(r.Client, r.Keys, g.now().Add(d.For))
+		g.Grants.Add(r.Client, append(append([]string(nil), r.Keys...), d.Added...), g.now().Add(d.For))
 	}
 	return d
 }

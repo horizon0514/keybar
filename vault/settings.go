@@ -21,11 +21,33 @@ type Settings struct {
 	// last reminded.
 	Shortcut     string `json:"shortcut,omitempty"`
 	LastReminded string `json:"lastReminded,omitempty"`
+
+	// 自动录入. Clipboard: the app offers to save a key copied (by its
+	// provider's format). WatchEnv: it tells of new .env files with keys
+	// under ScanRoots (none: the usual places). IgnoredFiles are never
+	// told of nor scanned. NeverAsk: per project folder, the names that
+	// `keys run` and agents do not offer to add when missing.
+	Clipboard    bool                `json:"clipboard"`
+	WatchEnv     bool                `json:"watchEnv"`
+	ScanRoots    []string            `json:"scanRoots,omitempty"`
+	IgnoredFiles []string            `json:"ignoredFiles,omitempty"`
+	NeverAsk     map[string][]string `json:"neverAsk,omitempty"`
+}
+
+// NeverAskIn are the names not to offer in the project at dir.
+func (s Settings) NeverAskIn(dir string) []string { return s.NeverAsk[dir] }
+
+// AddNeverAsk records names not to offer in the project at dir.
+func (s *Settings) AddNeverAsk(dir string, names ...string) {
+	if s.NeverAsk == nil {
+		s.NeverAsk = map[string][]string{}
+	}
+	s.NeverAsk[dir] = Clean(append(s.NeverAsk[dir], names...))
 }
 
 // DefaultSettings are the settings before any change.
 func DefaultSettings() Settings {
-	return Settings{Remind: true, RemindDays: SoonDays, GrantMinutes: 15, CLIApproval: true}
+	return Settings{Remind: true, RemindDays: SoonDays, GrantMinutes: 15, CLIApproval: true, Clipboard: true, WatchEnv: true}
 }
 
 // LoadSettings reads dir's settings.
