@@ -97,11 +97,27 @@ has "$out" "t:[REDACTED:E2E_TOKEN_E2E_APP] n:[REDACTED:E2E_NEW] p:unset" "keys r
 has "$out" "KeyBar 里没有 PORT，跳过" "keys run：缺的变量跳过并提示"
 
 echo "连接 AI 代理"
-mkdir -p "$HOME/.cursor" "$HOME/.codex"
+unset DSH_HOME CODEX_HOME
+mkdir -p "$HOME/.cursor" "$HOME/.codex" "$HOME/.gemini" "$HOME/.config/opencode" "$HOME/.config/goose" "$HOME/.dsh" "$HOME/.config/zed"
 printf '{\n  "mcpServers": {\n    "other": {\n      "command": "other-server"\n    }\n  }\n}\n' >"$HOME/.cursor/mcp.json"
 printf '# codex\nmodel = "o3"\n' >"$HOME/.codex/config.toml"
+printf '{\n  // my theme\n  "theme": "GitHub",\n}\n' >"$HOME/.gemini/settings.json"
+printf '{\n  "$schema": "https://opencode.ai/config.json",\n  // providers below\n  "mcp": {\n    "fs": {"type": "local", "command": ["npx", "fs-mcp"]},\n  },\n}\n' >"$HOME/.config/opencode/opencode.jsonc"
+printf '# goose\nGOOSE_PROVIDER: openai\nextensions:\n  developer:\n    enabled: true\n    name: developer\n    type: builtin\n' >"$HOME/.config/goose/config.yaml"
+printf '[]\n' >"$HOME/.dsh/cordis.patch.yml"
+printf '// Zed settings\n{\n  "vim_mode": true,\n}\n' >"$HOME/.config/zed/settings.json"
 out=$(keys connect </dev/null 2>&1 || true)
-has "$out" "● Cursor" "connect：Cursor 已连接"; has "$out" "● Codex" "connect：Codex 已连接"; has "$out" "Claude Code  未安装" "connect：没装的跳过"
+has "$out" "● Cursor" "connect：Cursor 已连接"; has "$out" "● Codex" "connect：Codex 已连接"; has "$out" "未安装：Claude Code" "connect：没装的跳过"
+for n in "Gemini CLI" opencode Goose "DeepSeek Harness" Zed; do has "$out" "● $n" "connect：$n 已连接"; done
+grep -qF '// my theme' "$HOME/.gemini/settings.json" && grep -qF "\"$bin\"" "$HOME/.gemini/settings.json" && ok "Gemini CLI：注释保留，已合并" || { bad "Gemini 配置"; cat "$HOME/.gemini/settings.json"; }
+grep -qF '// providers below' "$HOME/.config/opencode/opencode.jsonc" && grep -qF '"type": "local"' "$HOME/.config/opencode/opencode.jsonc" && grep -qF '"fs"' "$HOME/.config/opencode/opencode.jsonc" && ok "opencode：JSONC 注释保留，command 数组" || { bad "opencode 配置"; cat "$HOME/.config/opencode/opencode.jsonc"; }
+grep -qF '"vim_mode": true' "$HOME/.config/zed/settings.json" && grep -qF '"context_servers"' "$HOME/.config/zed/settings.json" && ok "Zed：context_servers" || { bad "Zed 配置"; cat "$HOME/.config/zed/settings.json"; }
+grep -qF '  developer:' "$HOME/.config/goose/config.yaml" && grep -qF "cmd: \"$bin\"" "$HOME/.config/goose/config.yaml" && grep -qF 'args: ["mcp", "--client", "goose"]' "$HOME/.config/goose/config.yaml" && ok "Goose：extensions.keybar，developer 保留" || { bad "Goose 配置"; cat "$HOME/.config/goose/config.yaml"; }
+grep -qF "name: '@deepseek-ai/dsh-mcp-client'" "$HOME/.dsh/cordis.patch.yml" && grep -qF 'serverName: keybar' "$HOME/.dsh/cordis.patch.yml" && ! grep -qx '\[\]' "$HOME/.dsh/cordis.patch.yml" && ok "DeepSeek Harness：cordis.patch.yml 一条 insert" || { bad "dsh 配置"; cat "$HOME/.dsh/cordis.patch.yml"; }
+out=$(keys connect --status 2>&1); for n in Goose "DeepSeek Harness" opencode; do has "$out" "● $n" "status 读回 $n 已连接"; done
+out=$(keys disconnect goose deepseek-harness 2>&1)
+grep -qF keybar "$HOME/.config/goose/config.yaml" && bad "Goose 没断开" || ok "Goose 断开"
+[ "$(cat "$HOME/.dsh/cordis.patch.yml")" = "[]" ] && ok "dsh 断开，恢复 []" || { bad "dsh 断开"; cat "$HOME/.dsh/cordis.patch.yml"; }
 grep -qF "\"$bin\"" "$HOME/.cursor/mcp.json" && grep -qF '"other-server"' "$HOME/.cursor/mcp.json" && ok "Cursor 配置合并，原有的保留" || { bad "Cursor 配置"; cat "$HOME/.cursor/mcp.json"; }
 [ -f "$HOME/.cursor/mcp.json.keybar-backup" ] && ok "原文件已备份" || bad "没有备份"
 grep -qF 'args = ["mcp", "--client", "codex"]' "$HOME/.codex/config.toml" && grep -qF 'model = "o3"' "$HOME/.codex/config.toml" && ok "Codex 配置合并" || { bad "Codex 配置"; cat "$HOME/.codex/config.toml"; }

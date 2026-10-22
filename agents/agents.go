@@ -1,7 +1,7 @@
-// Package agents connects KeyBar's MCP server to the AI agents on this
-// computer, Claude Code, Cursor and Codex, by adding a "keybar" server to
-// their MCP settings: merged into what is there, the file backed up first,
-// nothing written when it is already right.
+// Package agents connects KeyBar's MCP server to the AI agents and editors
+// on this computer by adding a "keybar" server to their MCP settings:
+// merged into what is there, the file backed up first, nothing written
+// when it is already right. The agents are data (registry.go).
 package agents
 
 import (
@@ -21,20 +21,60 @@ import (
 // ServerName is KeyBar's entry in the agents' settings.
 const ServerName = "keybar"
 
-// Agent is an agent KeyBar can connect.
-type Agent struct {
-	ID   string // claude-code, cursor, codex: also its --client
-	Name string // Claude Code
+// Format is how an agent's settings file is written.
+type Format int
+
+const (
+	JSON      Format = iota // JSON, comments and trailing commas allowed
+	CodexTOML               // [mcp_servers.keybar]
+	GooseYAML               // extensions: keybar:
+	DshYAML                 // a Cordis patch list
+)
+
+func (f Format) String() string {
+	return [...]string{"JSON", "TOML", "YAML", "YAML"}[f]
 }
 
-// All are the agents, in the order shown.
-var All = []Agent{{"claude-code", "Claude Code"}, {"cursor", "Cursor"}, {"codex", "Codex"}}
+// CLI is an agent's own command for its MCP settings, used when it is
+// installed: the safe way to change a file the agent rewrites itself.
+type CLI struct {
+	Name   string
+	Add    func(exe string, args []string) []string
+	Remove []string
+	// Fallback: when the command fails, edit the file instead.
+	Fallback bool
+}
 
-// Find finds an agent by its ID or name.
+// Agent is an agent KeyBar can connect.
+type Agent struct {
+	ID      string   // claude-code: also its --client
+	Name    string   // Claude Code
+	Aliases []string // other names Find knows
+	Format  Format
+	// Key is the path to the servers object (JSON).
+	Key []string
+	// Entry is KeyBar's entry's fields, in order (JSON).
+	Entry func(exe string, args []string) []field
+	// file is the settings file; "" when the agent is not on this system.
+	file func(e *Env) string
+	// marks are files or folders whose presence means it is installed,
+	// besides the settings file's folder (unless own is set).
+	marks func(e *Env) []string
+	// noDirMark: the settings file's folder does not tell (~ for ~/.claude.json).
+	noDirMark bool
+	Commands  []string // commands that mean it is installed
+	Apps      []string // macOS apps that mean it is installed
+	CLI       *CLI
+}
+
+// Find finds an agent by its ID, name or alias.
 func Find(s string) (Agent, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
+	norm := func(x string) string {
+		return strings.NewReplacer("-", "", " ", "", "_", "", "/", "").Replace(strings.ToLower(x))
+	}
 	for _, a := range All {
-		if s == a.ID || s == strings.ToLower(a.Name) || s == strings.ReplaceAll(a.ID, "-", "") || (a.ID == "claude-code" && s == "claude") {
+		if s == a.ID || s == strings.ToLower(a.Name) || norm(s) == norm(a.ID) || norm(s) == norm(a.Name) || slices.Contains(a.Aliases, s) {
 			return a, true
 		}
 	}
@@ -60,7 +100,7 @@ type Status struct {
 	Agent
 	State State
 	File  string // the settings file
-	Via   string // "claude CLI" when Claude Code is configured by its command
+	Via   string // "claude CLI" when it is configured by its command
 	Err   string // the settings could not be read
 }
 
@@ -75,6 +115,14 @@ type Env struct {
 	Run func(name string, args ...string) error
 	// CodexHome is $CODEX_HOME; ~/.codex when empty.
 	CodexHome string
+	// XDGConfig is $XDG_CONFIG_HOME; ~/.config when empty.
+	XDGConfig string
+	// AppData is %APPDATA% on Windows.
+	AppData string
+	// DshHome is $DSH_HOME; ~/.dsh when empty.
+	DshHome string
+	// GOOS is the system; runtime.GOOS when empty.
+	GOOS string
 }
 
 // Args are the server's arguments for agent.
@@ -84,32 +132,75 @@ func (e *Env) path(parts ...string) string {
 	return filepath.Join(append([]string{e.Home}, parts...)...)
 }
 
-// File is agent's settings file.
-func (e *Env) File(a Agent) string {
-	switch a.ID {
-	case "claude-code":
-		return e.path(".claude.json")
-	case "cursor":
-		return e.path(".cursor", "mcp.json")
+func (e *Env) goos() string {
+	if e.GOOS != "" {
+		return e.GOOS
 	}
-	if e.CodexHome != "" {
-		return filepath.Join(e.CodexHome, "config.toml")
-	}
-	return e.path(".codex", "config.toml")
+	return runtime.GOOS
 }
+
+// xdg is ~/.config, or $XDG_CONFIG_HOME.
+func (e *Env) xdg(parts ...string) string {
+	base := e.XDGConfig
+	if base == "" {
+		base = e.path(".config")
+	}
+	return filepath.Join(append([]string{base}, parts...)...)
+}
+
+// appConfig is where desktop apps keep settings: ~/Library/Application
+// Support, %APPDATA%, ~/.config.
+func (e *Env) appConfig(parts ...string) string {
+	var base string
+	switch e.goos() {
+	case "darwin":
+		base = e.path("Library", "Application Support")
+	case "windows":
+		base = e.AppData
+		if base == "" {
+			base = e.path("AppData", "Roaming")
+		}
+	default:
+		return e.xdg(parts...)
+	}
+	return filepath.Join(append([]string{base}, parts...)...)
+}
+
+// File is agent's settings file; "" when it has none on this system.
+func (e *Env) File(a Agent) string { return a.file(e) }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // installed tells whether the agent is on this computer: its settings
-// folder or its command.
+// folder, its command or its app.
 func (e *Env) installed(a Agent) bool {
-	switch a.ID {
-	case "claude-code":
-		return exists(e.path(".claude.json")) || exists(e.path(".claude")) || e.claudeCLI() != ""
-	case "cursor":
-		return exists(e.path(".cursor")) || (runtime.GOOS == "darwin" && e.LookPath == nil && exists("/Applications/Cursor.app"))
+	f := e.File(a)
+	if f == "" {
+		return false
 	}
-	return exists(filepath.Dir(e.File(a))) || e.look("codex") != ""
+	if !a.noDirMark && exists(filepath.Dir(f)) {
+		return true
+	}
+	if a.marks != nil {
+		for _, m := range a.marks(e) {
+			if exists(m) {
+				return true
+			}
+		}
+	}
+	for _, c := range a.Commands {
+		if e.look(c) != "" {
+			return true
+		}
+	}
+	if e.goos() == "darwin" && e.LookPath == nil {
+		for _, app := range a.Apps {
+			if exists(filepath.Join("/Applications", app)) || exists(e.path("Applications", app)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (e *Env) look(name string) string {
@@ -124,7 +215,8 @@ func (e *Env) look(name string) string {
 		return p
 	}
 	// An app started from the Dock has a short PATH: the usual places.
-	for _, d := range []string{e.path(".claude", "local"), e.path(".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", e.path(".npm-global", "bin"), e.path(".bun", "bin")} {
+	for _, d := range []string{e.path(".claude", "local"), e.path(".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin",
+		e.path(".npm-global", "bin"), e.path(".bun", "bin"), e.path(".opencode", "bin"), e.path(".cargo", "bin"), e.path("go", "bin")} {
 		p := filepath.Join(d, name)
 		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
 			return p
@@ -133,7 +225,13 @@ func (e *Env) look(name string) string {
 	return ""
 }
 
-func (e *Env) claudeCLI() string { return e.look("claude") }
+// cli is agent's own command, when it has one and it is installed.
+func (e *Env) cli(a Agent) string {
+	if a.CLI == nil {
+		return ""
+	}
+	return e.look(a.CLI.Name)
+}
 
 func (e *Env) run(name string, args ...string) error {
 	if e.Run != nil {
@@ -166,10 +264,22 @@ func (e *Env) Check() error {
 	return nil
 }
 
+// Supported are the agents KeyBar can connect on this system.
+func (e *Env) Supported() []Agent {
+	var out []Agent
+	for _, a := range All {
+		if e.File(a) != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // Status reads every agent's state.
 func (e *Env) Status() []Status {
-	out := make([]Status, 0, len(All))
-	for _, a := range All {
+	list := e.Supported()
+	out := make([]Status, 0, len(list))
+	for _, a := range list {
 		out = append(out, e.StatusOf(a))
 	}
 	return out
@@ -181,8 +291,8 @@ func (e *Env) StatusOf(a Agent) Status {
 	if !e.installed(a) {
 		return s
 	}
-	if a.ID == "claude-code" && e.claudeCLI() != "" {
-		s.Via = "claude CLI"
+	if e.cli(a) != "" {
+		s.Via = a.CLI.Name + " CLI"
 	}
 	cmd, args, found, err := e.read(a)
 	switch {
@@ -216,10 +326,15 @@ func (e *Env) read(a Agent) (cmd string, args []string, found bool, err error) {
 	if err != nil {
 		return "", nil, false, err
 	}
-	if a.ID == "codex" {
+	switch a.Format {
+	case CodexTOML:
 		return tomlServer(b)
+	case GooseYAML:
+		return gooseServer(b)
+	case DshYAML:
+		return dshServer(b)
 	}
-	return jsonServer(b)
+	return jsonServer(b, a)
 }
 
 // Connect adds or updates KeyBar in agent's settings; nothing is written
@@ -236,19 +351,16 @@ func (e *Env) Connect(a Agent) (Status, error) {
 		return s, fmt.Errorf("没找到 %s", a.Name)
 	}
 	var err error
-	if a.ID == "claude-code" && s.Via != "" {
-		// Claude Code rewrites ~/.claude.json while it runs: its own command
-		// is the safe way to change it.
-		cli := e.claudeCLI()
-		_ = e.run(cli, "mcp", "remove", ServerName, "--scope", "user")
-		err = e.run(cli, append([]string{"mcp", "add", ServerName, "--scope", "user", "--", e.Exe}, Args(a.ID)...)...)
+	if cli := e.cli(a); cli != "" {
+		_ = e.run(cli, a.CLI.Remove...)
+		err = e.run(cli, a.CLI.Add(e.Exe, Args(a.ID))...)
+		if a.CLI.Fallback && (err != nil || e.StatusOf(a).State != Connected) {
+			err = e.edit(a, true)
+		}
 	} else {
 		err = e.edit(a, true)
 	}
-	if err != nil {
-		return e.StatusOf(a), err
-	}
-	return e.StatusOf(a), nil
+	return e.StatusOf(a), err
 }
 
 // Disconnect removes KeyBar from agent's settings.
@@ -258,8 +370,11 @@ func (e *Env) Disconnect(a Agent) (Status, error) {
 		return s, nil
 	}
 	var err error
-	if a.ID == "claude-code" && s.Via != "" {
-		err = e.run(e.claudeCLI(), "mcp", "remove", ServerName, "--scope", "user")
+	if cli := e.cli(a); cli != "" {
+		err = e.run(cli, a.CLI.Remove...)
+		if a.CLI.Fallback && (err != nil || e.StatusOf(a).State != NotConnected) {
+			err = e.edit(a, false)
+		}
 	} else {
 		err = e.edit(a, false)
 	}
@@ -277,10 +392,15 @@ func (e *Env) edit(a Agent, add bool) error {
 		return err
 	}
 	var out []byte
-	if a.ID == "codex" {
+	switch a.Format {
+	case CodexTOML:
 		out, err = setTOMLServer(old, e.Exe, Args(a.ID), add)
-	} else {
-		out, err = setJSONServer(old, e.Exe, Args(a.ID), a.ID == "claude-code", add)
+	case GooseYAML:
+		out, err = setGooseServer(old, e.Exe, Args(a.ID), add)
+	case DshYAML:
+		out, err = setDshServer(old, e.Exe, Args(a.ID), add)
+	default:
+		out, err = setJSONServer(old, a, e.Exe, Args(a.ID), add)
 	}
 	if err != nil {
 		return fmt.Errorf("%s：%w（没有修改）", path, err)

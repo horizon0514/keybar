@@ -110,7 +110,7 @@ const usage = `keys — KeyBar 的命令行：密钥只存在系统钥匙串里�
   keys import .env            把 .env 里的密钥收进钥匙串（同名冲突逐个问你）
   keys run -- npm run dev     自动注入项目需要的密钥：看 .env.example / .env 里的变量名，
                               KeyBar 里有同名的就注入，不用写配置
-  keys connect                把 KeyBar 接到 Claude Code、Cursor、Codex（MCP），代理用密钥时你点批准
+  keys connect                把 KeyBar 接到已安装的 AI 代理（MCP），代理用密钥时你点批准
 
 用法：
   keys add NAME [选项]        添加密钥（值从标准输入或隐藏提示读，绝不从参数读）
@@ -124,7 +124,7 @@ const usage = `keys — KeyBar 的命令行：密钥只存在系统钥匙串里�
                               只把需要的密钥注入子进程的环境变量；-e 指定时只注入这些
   keys import .env [--on-conflict ask|skip|overwrite|rename] [--project 名] [--prefix P] [--shred]
                               导入 .env；同名但值不同时：保留现有 / 覆盖（记为轮换）/ 改名导入
-  keys connect [代理...] [--status]   连接 AI 代理（claude-code、cursor、codex；默认全部已安装的）
+  keys connect [代理...] [--status]   连接 AI 代理（claude-code、cursor、codex、gemini、opencode、pi、zed…；默认全部已安装的）
   keys disconnect [代理...]   断开
   keys rotate NAME [--no-sync] [--note 说明]
                               换新值，自动更新 GitHub Actions / Vercel，列出其余要手动更新的平台

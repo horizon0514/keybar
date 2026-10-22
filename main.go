@@ -94,7 +94,8 @@ func agentEnv() *agents.Env {
 	if r, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = r
 	}
-	return &agents.Env{Home: home, Exe: exe, CodexHome: os.Getenv("CODEX_HOME")}
+	return &agents.Env{Home: home, Exe: exe, CodexHome: os.Getenv("CODEX_HOME"), XDGConfig: os.Getenv("XDG_CONFIG_HOME"),
+		AppData: os.Getenv("APPDATA"), DshHome: os.Getenv("DSH_HOME")}
 }
 
 func cliMain(args []string) int {

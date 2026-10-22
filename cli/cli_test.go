@@ -434,7 +434,7 @@ func TestConnect(t *testing.T) {
 		t.Fatalf("%d %s %s", c, x.out.String(), x.err.String())
 	}
 	out := x.out.String()
-	if !strings.Contains(out, "● Cursor") || !strings.Contains(out, "● Codex") || !strings.Contains(out, "  Claude Code  未安装") {
+	if !strings.Contains(out, "● Cursor") || !strings.Contains(out, "● Codex") || !strings.Contains(out, "未安装：Claude Code、") || strings.Contains(out, "Claude Code  ") {
 		t.Errorf("%s", out)
 	}
 	b, _ := os.ReadFile(filepath.Join(home, ".cursor", "mcp.json"))
@@ -442,7 +442,7 @@ func TestConnect(t *testing.T) {
 		t.Errorf("cursor: %s", b)
 	}
 	x.run("", "connect", "--status")
-	if !strings.Contains(x.out.String(), "● Codex        已连接") {
+	if !strings.Contains(x.out.String(), "● Codex            已连接") {
 		t.Errorf("status: %s", x.out.String())
 	}
 	if c := x.run("", "connect", "claude"); c != 1 {
@@ -457,6 +457,17 @@ func TestConnect(t *testing.T) {
 	}
 	if c := x.run("", "connect", "vim"); c != 2 {
 		t.Error("unknown agent")
+	}
+	// opencode's JSONC: KeyBar added, the comment kept.
+	oc := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	_ = os.MkdirAll(filepath.Dir(oc), 0o755)
+	_ = os.WriteFile(oc, []byte("{\n  // my settings\n  \"theme\": \"tokyonight\",\n}\n"), 0o644)
+	if c := x.run("", "connect", "opencode"); c != 0 {
+		t.Fatal(x.out.String(), x.err.String())
+	}
+	b, _ = os.ReadFile(oc)
+	if !strings.Contains(string(b), "// my settings") || !strings.Contains(string(b), `"command": [`) || !strings.Contains(string(b), `"opencode"`) {
+		t.Errorf("opencode: %s", b)
 	}
 }
 

@@ -335,6 +335,10 @@ func TestScreenshots(t *testing.T) {
 		h.grants.Add("mcp:claude-code", []string{"DEEPSEEK_API_KEY"}, h.clock.Add(10*time.Minute))
 		h.openTab(tabAgents)
 	})
+	shot("settings-agents-unfolded", panelWidth, func(h *harness, tt *ui.Tester) {
+		h.openTab(tabAgents)
+		h.showMissing = true
+	})
 	shot("import", panelWidth, func(h *harness, tt *ui.Tester) {
 		h.pickFile = func(func(string)) {}
 		h.openImport()
@@ -442,19 +446,39 @@ func TestConnectAgentsUI(t *testing.T) {
 	for _, s := range h.agentState {
 		states[s.ID] = s.State
 	}
-	if states["claude-code"] != agents.Connected || states["cursor"] != agents.NotConnected || states["codex"] != agents.NotInstalled {
+	if states["claude-code"] != agents.Connected || states["gemini"] != agents.Connected || states["cursor"] != agents.NotConnected ||
+		states["opencode"] != agents.NotConnected || states["vscode"] != agents.Outdated || states["codex"] != agents.NotInstalled {
 		t.Fatalf("%v", states)
 	}
-	if !tt.HasText("连接 AI 代理") || !tt.HasText("已连接 · ~/.claude.json") || !tt.HasText("未连接 · ~/.cursor/mcp.json") || !tt.HasText("未安装") {
+	missing := 0
+	for _, s := range h.agentState {
+		if s.State == agents.NotInstalled {
+			missing++
+		}
+	}
+	if !tt.HasText("连接 AI 代理") || !tt.HasText("已连接 · ~/.claude.json") || !tt.HasText("未连接 · ~/.cursor/mcp.json") ||
+		!tt.HasText(fmt.Sprintf("未安装 %d", missing)) || tt.HasText("Codex") {
 		t.Errorf("%q", tt.Texts())
 	}
-	tt.Key(ui.Cmd, ui.KeyEnter) // connect all: Cursor
+	// The agents not installed are folded; a click shows them.
+	if err := tt.Click(fmt.Sprintf("未安装 %d", missing)); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("Codex") || !tt.HasText("DeepSeek Harness") {
+		t.Errorf("unfolded: %q", tt.Texts())
+	}
+	tt.Key(ui.Cmd, ui.KeyEnter) // connect all: Cursor, opencode, VS Code
 	tt.Frame()
 	b, err := os.ReadFile(filepath.Join(h.agents.Home, ".cursor", "mcp.json"))
 	if err != nil || !strings.Contains(string(b), `"`+h.exe+`"`) || !strings.Contains(string(b), `"cursor"`) {
 		t.Errorf("cursor: %s %v", b, err)
 	}
-	if !strings.Contains(h.toast, "Cursor") {
+	b, _ = os.ReadFile(filepath.Join(h.agents.Home, ".config", "opencode", "opencode.jsonc"))
+	if !strings.Contains(string(b), "// example") || !strings.Contains(string(b), `"type": "local"`) {
+		t.Errorf("opencode: %s", b)
+	}
+	if !strings.Contains(h.toast, "3 个代理") {
 		t.Errorf("toast %q", h.toast)
 	}
 	h.connectAgent(agents.All[0], false)
@@ -465,7 +489,7 @@ func TestConnectAgentsUI(t *testing.T) {
 	if strings.Contains(string(b), "keybar") {
 		t.Errorf("claude: %s", b)
 	}
-	if evs := vault.ReadLog(h.v.Dir, 0, func(e vault.Event) bool { return e.Action == "connect" || e.Action == "disconnect" }); len(evs) != 2 {
+	if evs := vault.ReadLog(h.v.Dir, 0, func(e vault.Event) bool { return e.Action == "connect" || e.Action == "disconnect" }); len(evs) != 4 {
 		t.Errorf("log %v", evs)
 	}
 }

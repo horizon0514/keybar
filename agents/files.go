@@ -13,78 +13,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// JSON settings (Claude Code, Cursor): {"mcpServers": {"keybar": {…}}},
-// edited keeping every other member, in its order.
-
-type member struct {
-	key string
-	val json.RawMessage
-}
-
-func parseObject(b []byte) ([]member, error) {
-	d := json.NewDecoder(bytes.NewReader(b))
-	t, err := d.Token()
-	if err != nil {
-		return nil, err
-	}
-	if t != json.Delim('{') {
-		return nil, errors.New("不是 JSON 对象")
-	}
-	var out []member
-	for d.More() {
-		t, err := d.Token()
-		if err != nil {
-			return nil, err
-		}
-		k, _ := t.(string)
-		var v json.RawMessage
-		if err := d.Decode(&v); err != nil {
-			return nil, err
-		}
-		out = append(out, member{k, v})
-	}
-	if _, err := d.Token(); err != nil {
-		return nil, err
-	}
-	if _, err := d.Token(); err == nil {
-		return nil, errors.New("JSON 后面还有内容")
-	}
-	return out, nil
-}
-
-func encodeObject(ms []member) []byte {
-	var b bytes.Buffer
-	b.WriteByte('{')
-	for i, m := range ms {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		k, _ := json.Marshal(m.key)
-		b.Write(k)
-		b.WriteByte(':')
-		var c bytes.Buffer
-		if json.Compact(&c, m.val) == nil {
-			b.Write(c.Bytes())
-		} else {
-			b.Write(m.val)
-		}
-	}
-	b.WriteByte('}')
-	return b.Bytes()
-}
-
-func find(ms []member, k string) int {
-	return slices.IndexFunc(ms, func(m member) bool { return m.key == k })
-}
-
-func set(ms []member, k string, v json.RawMessage) []member {
-	if i := find(ms, k); i >= 0 {
-		ms[i].val = v
-		return ms
-	}
-	return append(ms, member{k, v})
-}
-
 // indentOf is the file's indentation: its first indented line's.
 func indentOf(b []byte) string {
 	sc := bufio.NewScanner(bytes.NewReader(b))
@@ -98,74 +26,104 @@ func indentOf(b []byte) string {
 	return "  "
 }
 
-func jsonServer(b []byte) (cmd string, args []string, found bool, err error) {
-	if len(bytes.TrimSpace(b)) == 0 {
-		return "", nil, false, nil
+// serverOf reads a server entry: {"command": "x", "args": [...]}, or
+// opencode's {"command": ["x", ...]}.
+func serverOf(v any) (cmd string, args []string, ok bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return "", nil, false
 	}
-	top, err := parseObject(b)
+	strs := func(v any) []string {
+		var out []string
+		l, _ := v.([]any)
+		for _, x := range l {
+			s, _ := x.(string)
+			out = append(out, s)
+		}
+		return out
+	}
+	switch c := m["command"].(type) {
+	case string:
+		return c, strs(m["args"]), true
+	case []any:
+		l := strs(c)
+		if len(l) > 0 {
+			return l[0], l[1:], true
+		}
+	}
+	return "", nil, true
+}
+
+func jsonServer(b []byte, a Agent) (cmd string, args []string, found bool, err error) {
+	doc, err := decodeJSONC(string(b))
 	if err != nil {
 		return "", nil, false, fmt.Errorf("无法解析：%w", err)
 	}
-	i := find(top, "mcpServers")
-	if i < 0 || string(top[i].val) == "null" {
-		return "", nil, false, nil
+	cur := doc
+	for _, k := range append(slices.Clone(a.Key), ServerName) {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return "", nil, false, nil
+		}
+		if cur, ok = m[k]; !ok {
+			return "", nil, false, nil
+		}
 	}
-	var servers map[string]struct {
-		Command string   `json:"command"`
-		Args    []string `json:"args"`
-	}
-	if err := json.Unmarshal(top[i].val, &servers); err != nil {
-		return "", nil, false, fmt.Errorf("mcpServers 无法解析：%w", err)
-	}
-	s, ok := servers[ServerName]
-	return s.Command, s.Args, ok, nil
+	cmd, args, _ = serverOf(cur)
+	return cmd, args, true, nil
 }
 
-func setJSONServer(old []byte, exe string, args []string, typed, add bool) ([]byte, error) {
-	var top []member
-	if len(bytes.TrimSpace(old)) > 0 {
-		var err error
-		if top, err = parseObject(old); err != nil {
-			return nil, fmt.Errorf("无法解析（%v）", err)
-		}
-	}
-	var servers []member
-	if i := find(top, "mcpServers"); i >= 0 && string(top[i].val) != "null" {
-		var err error
-		if servers, err = parseObject(top[i].val); err != nil {
-			return nil, fmt.Errorf("mcpServers 无法解析（%v）", err)
-		}
-	} else if !add {
-		return old, nil
-	}
-	if add {
-		var entry []member
-		if i := find(servers, ServerName); i >= 0 {
-			entry, _ = parseObject(servers[i].val) // keep what the user added (env…)
-		}
-		if typed && find(entry, "type") < 0 {
-			entry = append([]member{{"type", json.RawMessage(`"stdio"`)}}, entry...)
-		}
-		c, _ := json.Marshal(exe)
-		a, _ := json.Marshal(args)
-		entry = set(set(entry, "command", c), "args", a)
-		servers = set(servers, ServerName, encodeObject(entry))
-	} else {
-		i := find(servers, ServerName)
-		if i < 0 {
+func setJSONServer(old []byte, a Agent, exe string, args []string, add bool) ([]byte, error) {
+	text := string(old)
+	blank := strings.TrimSpace(text) == ""
+	if blank {
+		if !add {
 			return old, nil
 		}
-		servers = slices.Delete(servers, i, i+1)
+		text = "{}"
 	}
-	top = set(top, "mcpServers", encodeObject(servers))
-	var out bytes.Buffer
-	if err := json.Indent(&out, encodeObject(top), "", indentOf(old)); err != nil {
-		return nil, err
+	before, err := decodeJSONC(text)
+	if err != nil {
+		return nil, fmt.Errorf("无法解析（%v）", err)
 	}
-	if len(old) == 0 || bytes.HasSuffix(old, []byte("\n")) {
-		out.WriteByte('\n')
+	if _, ok := before.(map[string]any); !ok {
+		return nil, errors.New("不是 JSON 对象")
 	}
-	return out.Bytes(), nil
+	unit := indentOf(old)
+	entry := append(slices.Clone(a.Key), ServerName)
+	want := before
+	if add {
+		fields := a.Entry(exe, args)
+		_, _, found, _ := jsonServer([]byte(text), a)
+		if found {
+			// Update what is there, keeping what the user added (env…).
+			for _, f := range fields {
+				p := append(slices.Clone(entry), f.Key)
+				if text, err = setPath(text, p, f.Val, unit); err != nil {
+					return nil, fmt.Errorf("无法修改（%v）", err)
+				}
+				want = goSet(want, p, f.Val)
+			}
+		} else {
+			if text, err = setPath(text, entry, ordered(fields), unit); err != nil {
+				return nil, fmt.Errorf("无法修改（%v）", err)
+			}
+			want = goSet(want, entry, ordered(fields))
+		}
+	} else {
+		if text, err = removePath(text, entry); err != nil {
+			return nil, fmt.Errorf("无法修改（%v）", err)
+		}
+		want = goDel(want, entry)
+	}
+	if blank {
+		text += "\n"
+	}
+	after, err := decodeJSONC(text)
+	if err != nil || !sameJSON(after, want) {
+		return nil, errors.New("改完后内容对不上，请手动修改")
+	}
+	return []byte(text), nil
 }
 
 // TOML settings (Codex): a [mcp_servers.keybar] table, edited as text so

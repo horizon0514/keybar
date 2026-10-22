@@ -1154,9 +1154,38 @@ func (a *app) connectSection(c *ui.Context, k ink) {
 			ui.Text(c, "这里没法检测代理。").FontSize(12).TextColor(k.muted)
 			return
 		}
+		// Installed first; the rest folded under 未安装, dimmed.
+		var missing []agents.Status
 		ui.Column(c.Key("agents")).Gap(0).Children(func() {
 			for _, st := range a.agentState {
+				if st.State == agents.NotInstalled {
+					missing = append(missing, st)
+					continue
+				}
 				a.agentRow(c.Key(st.ID), k, st)
+			}
+			if len(missing) == 0 {
+				return
+			}
+			chev := "›"
+			if a.showMissing {
+				chev = "⌄"
+			}
+			label := fmt.Sprintf("未安装 %d", len(missing))
+			fold := ui.Row(c.Key("fold")).Gap(10).Padding(7, 8).Margin(0, -8).Radius(7).AlignItems(ui.Center).
+				Cursor(ui.CursorPointer).Label(label).OnClick(func() { a.showMissing = !a.showMissing })
+			if fold.Hovered() {
+				fold.Background(k.hover)
+			}
+			fold.Children(func() {
+				ui.Box(c).Size(7, 7).Shrink(0)
+				ui.Text(c, label).FontSize(12).TextColor(k.faint).Grow(1)
+				ui.Text(c, chev).FontSize(13).TextColor(k.faint)
+			})
+			if a.showMissing {
+				for _, st := range missing {
+					a.agentRow(c.Key("m-"+st.ID), k, st)
+				}
 			}
 		})
 		if n := a.toConnect(); n > 1 {
@@ -1168,11 +1197,23 @@ func (a *app) connectSection(c *ui.Context, k ink) {
 }
 
 func (a *app) agentRow(c *ui.Context, k ink, st agents.Status) {
+	if st.State == agents.NotInstalled {
+		// Folded away below the rest: one dim line each.
+		ui.Row(c).Gap(10).Padding(4, 8).Margin(0, -8).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Size(7, 7).Radius(3.5).Background(k.line).Shrink(0)
+			ui.Text(c, st.Name).FontSize(12).TextColor(k.faint).Grow(1).SingleLine()
+		})
+		return
+	}
 	col, sub := k.line, "未安装"
 	action, on := "", true
 	where := a.shortHome(st.File)
 	if st.Via != "" {
-		where = "通过 claude 命令 · " + where
+		where = "通过 " + strings.TrimSuffix(st.Via, " CLI") + " 命令 · " + where
+	}
+	nameCol := k.text
+	if st.State == agents.NotInstalled {
+		nameCol = k.faint
 	}
 	switch st.State {
 	case agents.Connected:
@@ -1194,7 +1235,7 @@ func (a *app) agentRow(c *ui.Context, k ink, st agents.Status) {
 	row.Children(func() {
 		ui.Box(c).Size(7, 7).Radius(3.5).Background(col).Shrink(0)
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
-			ui.Text(c, st.Name).FontSize(13).FontWeight(550)
+			ui.Text(c, st.Name).FontSize(13).FontWeight(550).TextColor(nameCol)
 			subCol := k.faint
 			if a.agentErr[st.ID] != "" || st.Err != "" {
 				subCol = k.danger

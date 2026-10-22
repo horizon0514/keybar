@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"keybar/agents"
 )
 
 // Request is an agent asking to use keys.
@@ -82,6 +84,9 @@ func ClientName(c string) string {
 		return "KeyBar"
 	case "", "unknown":
 		return "未知代理"
+	}
+	if a, ok := agents.Find(n); ok {
+		return a.Name
 	}
 	return n
 }

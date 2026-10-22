@@ -4,25 +4,32 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 
 	"keybar/agents"
 	"keybar/vault"
 )
 
-// which are the agents named, or all.
-func which(names []string) ([]agents.Agent, error) {
+// which are the agents named, or all those this system has.
+func which(e *Env, names []string) (list []agents.Agent, named bool, err error) {
 	if len(names) == 0 || len(names) == 1 && names[0] == "all" {
-		return agents.All, nil
+		return e.Agents.Supported(), false, nil
 	}
-	var out []agents.Agent
 	for _, n := range names {
 		a, ok := agents.Find(n)
 		if !ok {
-			return nil, usageError("不认识的代理 " + n + "：claude-code、cursor、codex")
+			var ids []string
+			for _, a := range e.Agents.Supported() {
+				ids = append(ids, a.ID)
+			}
+			return nil, true, usageError("不认识的代理 " + n + "：" + strings.Join(ids, "、"))
 		}
-		out = append(out, a)
+		if e.Agents.File(a) == "" {
+			return nil, true, fmt.Errorf("%s 在这个系统上没有已知的设置文件", a.Name)
+		}
+		list = append(list, a)
 	}
-	return out, nil
+	return list, true, nil
 }
 
 func dot(s agents.State) string {
@@ -46,7 +53,14 @@ func (e *Env) statusLine(s agents.Status, note string) {
 	if note == "" {
 		note = s.State.Zh()
 	}
-	fmt.Fprintf(e.Stdout, "%s %-12s %-8s %s\n", dot(s.State), s.Name, note, where)
+	fmt.Fprintf(e.Stdout, "%s %-16s %-8s %s\n", dot(s.State), s.Name, note, where)
+}
+
+// missingLine lists the agents not installed, on one line.
+func (e *Env) missingLine(names []string) {
+	if len(names) > 0 {
+		fmt.Fprintf(e.Stdout, "  未安装：%s\n", strings.Join(names, "、"))
+	}
 }
 
 func connect(e *Env, args []string) (int, error) {
@@ -59,25 +73,31 @@ func connect(e *Env, args []string) (int, error) {
 	if e.Agents == nil {
 		return 1, errors.New("这里不能连接代理")
 	}
-	list, err := which(pos)
+	list, named, err := which(e, pos)
 	if err != nil {
 		return 2, err
 	}
+	var missing []string
 	if *status {
 		for _, a := range list {
-			e.statusLine(e.Agents.StatusOf(a), "")
+			s := e.Agents.StatusOf(a)
+			if s.State == agents.NotInstalled && !named {
+				missing = append(missing, a.Name)
+				continue
+			}
+			e.statusLine(s, "")
 		}
+		e.missingLine(missing)
 		return 0, nil
 	}
 	if err := e.Agents.Check(); err != nil {
 		return 1, err
 	}
-	named := len(pos) > 0 && pos[0] != "all"
 	connected, failed := 0, 0
 	for _, a := range list {
 		s := e.Agents.StatusOf(a)
 		if s.State == agents.NotInstalled && !named {
-			e.statusLine(s, "")
+			missing = append(missing, a.Name)
 			continue
 		}
 		was := s.State
@@ -96,9 +116,10 @@ func connect(e *Env, args []string) (int, error) {
 			_ = e.Vault.Log(vault.Event{Client: "cli", Action: "connect", Decision: "ok", Detail: a.Name})
 		}
 	}
+	e.missingLine(missing)
 	switch {
 	case connected == 0 && failed == 0:
-		fmt.Fprintln(e.Stdout, "没找到 Claude Code、Cursor 或 Codex。装好后再运行 keys connect。")
+		fmt.Fprintln(e.Stdout, "没找到支持的 AI 代理。装好后再运行 keys connect（列表见 keys connect --status）。")
 		return 1, nil
 	case connected > 0:
 		fmt.Fprintln(e.Stdout, "重启代理（或开个新会话）后生效：它会看到 KeyBar 的 run_with_secrets 工具，每次用密钥都要你批准。")
@@ -113,13 +134,16 @@ func disconnect(e *Env, args []string) (int, error) {
 	if e.Agents == nil {
 		return 1, errors.New("这里不能断开代理")
 	}
-	list, err := which(args)
+	list, named, err := which(e, args)
 	if err != nil {
 		return 2, err
 	}
 	code := 0
 	for _, a := range list {
 		was := e.Agents.StatusOf(a).State
+		if was == agents.NotInstalled && !named {
+			continue
+		}
 		s, err := e.Agents.Disconnect(a)
 		if err != nil {
 			code = 1

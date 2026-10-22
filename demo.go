@@ -75,14 +75,28 @@ func seedDemo(v *vault.Vault, now time.Time) {
 	}
 }
 
-// demoAgents is a home folder with Claude Code connected, Cursor not, and
-// no Codex: the example's, never the user's settings.
+// demoAgents is a home folder with a few agents installed (Claude Code and
+// Gemini CLI connected, Cursor and opencode not, VS Code pointing at an
+// old path) and the rest not: the example's, never the user's settings.
 func demoAgents(exe string) *agents.Env {
 	home, _ := os.MkdirTemp("", "keybar-demo-home-")
-	e := &agents.Env{Home: home, Exe: exe, LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
+	e := &agents.Env{Home: home, Exe: exe, GOOS: "darwin", LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
+	put := func(body string, parts ...string) {
+		p := filepath.Join(append([]string{home}, parts...)...)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, []byte(body), 0o600)
+	}
 	_ = os.MkdirAll(filepath.Join(home, ".cursor"), 0o755)
-	_ = os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{}\n"), 0o600)
-	_, _ = e.Connect(agents.All[0])
+	put("{}\n", ".claude.json")
+	put("{\n  \"theme\": \"GitHub\"\n}\n", ".gemini", "settings.json")
+	put("{\n  // example\n  \"$schema\": \"https://opencode.ai/config.json\",\n}\n", ".config", "opencode", "opencode.jsonc")
+	put("{\n  \"servers\": {\n    \"keybar\": {\"type\": \"stdio\", \"command\": \"/Volumes/KeyBar/KeyBar.app/Contents/MacOS/KeyBar\", \"args\": [\"mcp\", \"--client\", \"vscode\"]}\n  }\n}\n",
+		"Library", "Application Support", "Code", "User", "mcp.json")
+	for _, id := range []string{"claude-code", "gemini"} {
+		if a, ok := agents.Find(id); ok {
+			_, _ = e.Connect(a)
+		}
+	}
 	return e
 }
 

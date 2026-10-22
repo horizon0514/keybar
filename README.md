@@ -4,7 +4,7 @@
 
 - **钥匙串**：macOS 钥匙串 / Windows 凭据管理器 / Linux Secret Service（GNOME Keyring、KWallet）。KeyBar 自己的文件里只有元数据，没有值。
 - **不用写配置**：密钥名就是环境变量名。`keys run` 看项目的 `.env.example` / `.env` 里有哪些变量名，KeyBar 里有同名的就注入。
-- **一键连接 AI 代理**：设置里点一下（或 `keys connect`），KeyBar 就加进 Claude Code、Cursor、Codex 的 MCP 设置。代理用 `run_with_secrets` 带着 key 跑命令，输出里的值被替换成 `[REDACTED:NAME]`。每次使用都要你在菜单栏里批准，全部记日志。
+- **一键连接 AI 代理**：设置里点一下（或 `keys connect`），KeyBar 就加进已安装的 AI 代理和编辑器的 MCP 设置（Claude Code、Cursor、Codex、Gemini CLI、opencode、pi 等 19 种，见[下表](#支持的代理)）。代理用 `run_with_secrets` 带着 key 跑命令，输出里的值被替换成 `[REDACTED:NAME]`。每次使用都要你在菜单栏里批准，全部记日志。
 - **导入 `.env`**：同名但值不同时逐个决定：保留现有、覆盖（记为一次轮换）、或改名导入。
 - **菜单栏 / 托盘**：键盘优先的两栏面板（左边清单、右边详情，`⌘1` `⌘2` `⌘3` 切换“全部 / 需处理 / 代理禁用”），批准请求、查看清单、轮换；每天提醒超期和快到期的 key，图标上有角标。
 - **轮换清单**：换新值后自动更新 GitHub Actions secrets 和 Vercel 环境变量，其余平台（Railway、TiDB Cloud、`.env`……）列成清单逐个勾掉。
@@ -80,12 +80,13 @@ keys run -- npm run dev
 设置 → AI 代理 →「连接」（`⌘↵` 全部连接），或：
 
 ```sh
-keys connect              # 连接所有已安装的：Claude Code、Cursor、Codex
+keys connect              # 连接所有已安装的（列表见下表）
 keys connect --status     # ● 已连接  ○ 未连接
+keys connect opencode zed # 只连这几个
 keys disconnect cursor
 ```
 
-它把 `keybar` 加进 `~/.claude.json`（装了 `claude` 命令时用 `claude mcp add --scope user`）、`~/.cursor/mcp.json`、`~/.codex/config.toml`：只改 `keybar` 这一项，其它设置原样保留，改之前把原文件备份成 `*.keybar-backup`，已经连好就什么都不写。重启代理（或开新会话）后，代理这样用：
+它把 `keybar` 这一项加进每个代理自己的 MCP 设置（路径见[下表](#支持的代理)）：只改 `keybar` 这一项，其它设置和注释原样保留，改之前把原文件备份成 `*.keybar-backup`，写入是原子的，已经连好就什么都不写；文件读不懂就不改并告诉你。重启代理（或开新会话）后，代理这样用：
 
 > 你：跑一下集成测试
 >
@@ -141,7 +142,37 @@ DATABASE_URL = "TIDB_PROD_URL"
 
 ## 给 AI 代理用（MCP）
 
-用 `keys connect` 或设置里的「连接」即可。其它支持 MCP 的代理：命令是 KeyBar 程序（macOS `/Applications/KeyBar.app/Contents/MacOS/KeyBar`，Linux/Windows 是 `keys` 或 `KeyBar.exe` 的完整路径），参数 `mcp --client 名字`；设置里可以复制这段 JSON，也见 [examples/](examples/)。
+用 `keys connect` 或设置里的「连接」即可。
+
+### 支持的代理
+
+设置里已安装的排在前面，没装的收在「未安装」下面。路径是 macOS / Linux 的；Windows 上 `~/Library/Application Support` 对应 `%APPDATA%`。
+
+| 代理 | 设置文件 | 怎么改 |
+|---|---|---|
+| Claude Code | `~/.claude.json` → `mcpServers` | 有 `claude` 命令时用 `claude mcp add --scope user`，否则合并 JSON |
+| Cursor | `~/.cursor/mcp.json` → `mcpServers` | 合并 JSON |
+| Codex | `~/.codex/config.toml`（`$CODEX_HOME`）→ `[mcp_servers.keybar]` | 按行改 TOML，注释保留 |
+| Gemini CLI | `~/.gemini/settings.json` → `mcpServers` | 合并 JSON（可带注释） |
+| Qwen Code | `~/.qwen/settings.json` → `mcpServers` | 合并 JSON |
+| opencode | `~/.config/opencode/opencode.json`（或 `.jsonc`）→ `mcp`，`type: local`，`command` 是数组 | 合并 JSONC，注释保留 |
+| pi | `~/.pi/agent/mcp.json` → `mcpServers`（pi 0.99 起内置 MCP） | 用 `pi mcp add`，老版本没有这个命令就合并 JSON |
+| Kimi Code | `~/.kimi-code/mcp.json`（旧版 Kimi CLI：`~/.kimi/mcp.json`）→ `mcpServers` | 合并 JSON |
+| iFlow CLI | `~/.iflow/settings.json` → `mcpServers` | 合并 JSON |
+| Crush | `~/.config/crush/crush.json` → `mcp`，`type: stdio` | 合并 JSON（Windows 暂不支持） |
+| Amp | `~/.config/amp/settings.json` → `amp.mcpServers` | 合并 JSON |
+| Goose | `~/.config/goose/config.yaml` → `extensions.keybar`（`type: stdio`） | 按行改 YAML，改完逐项核对（Windows 暂不支持） |
+| DeepSeek Harness（`dsh`） | `~/.dsh/cordis.patch.yml`（`$DSH_HOME`）：一条 `insert` 补丁挂 `@deepseek-ai/dsh-mcp-client` | 在标记注释之间加一段 YAML，改完核对 |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` → `mcpServers` | 合并 JSON（Linux 没有） |
+| VS Code（GitHub Copilot） | `~/Library/Application Support/Code/User/mcp.json` → `servers`，`type: stdio` | 合并 JSONC |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` → `mcpServers` | 合并 JSON |
+| Zed | `~/.config/zed/settings.json` → `context_servers` | 合并 JSONC，注释保留 |
+| Kiro | `~/.kiro/settings/mcp.json` → `mcpServers` | 合并 JSON |
+| Cline（VS Code 扩展） | `…/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` → `mcpServers` | 合并 JSON |
+
+JSON 文件允许注释和结尾逗号（JSONC）：KeyBar 直接在原文上插入或删掉 `keybar` 这一段，其它字节不动；改完把前后两份解析出来比对，除了 `keybar` 有任何不同就放弃、不写。
+
+其它支持 MCP 的代理：命令是 KeyBar 程序（macOS `/Applications/KeyBar.app/Contents/MacOS/KeyBar`，Linux/Windows 是 `keys` 或 `KeyBar.exe` 的完整路径），参数 `mcp --client 名字`；设置里可以复制这段 JSON，也见 [examples/](examples/)。
 
 工具：
 
@@ -194,7 +225,7 @@ KeyBar keeps API keys in the OS keychain (macOS Keychain, Windows Credential Man
 
 - `keys import .env` moves a project's keys into the keychain; for names it already has with a different value it asks per key: keep, overwrite (recorded as a rotation) or import under a new name (`NAME_PROJECT` by default). Without a terminal, `--on-conflict skip|overwrite|rename` (default skip).
 - `keys run -- cmd` needs no config: it reads the variable names (never values) in `.env.example` / `.env.sample` / `.env` from the current folder up to the git root and injects the keys KeyBar holds under those names into that one process; `keys.toml` (names only) can map a variable to a differently named key. `--redact` scrubs values from its output.
-- `keys connect` (or Settings → AI 代理 → 连接) adds KeyBar's MCP server to Claude Code, Cursor and Codex, merging into their settings with a backup. Agents call `run_with_secrets` (keys auto-detected from the project, output redacted); `list_keys` gives metadata only; `request_secret` (raw value) is discouraged. Every use needs approval in the menu bar app (allow once / allow N minutes / deny, per client and key), falling back to a system dialog, and is written to the access log.
+- `keys connect` (or Settings → AI 代理 → 连接) adds KeyBar's MCP server to every installed agent it knows — Claude Code, Cursor, Codex, Gemini CLI, Qwen Code, opencode, pi, Kimi Code, iFlow CLI, Crush, Amp, Goose, DeepSeek Harness, Claude Desktop, VS Code, Windsurf, Zed, Kiro, Cline — merging into their settings (JSONC comments kept, TOML/YAML edited in place) with a backup, refusing files it cannot parse. Agents call `run_with_secrets` (keys auto-detected from the project, output redacted); `list_keys` gives metadata only; `request_secret` (raw value) is discouraged. Every use needs approval in the menu bar app (allow once / allow N minutes / deny, per client and key), falling back to a system dialog, and is written to the access log.
 - `keys rotate` stores a new value, pushes it to GitHub Actions secrets and Vercel env vars, and lists every other place to update as a checklist.
 - A menu bar / tray app (keyboard first) shows the inventory, approves requests, and reminds you daily of overdue keys.
 - There is deliberately no `export`.

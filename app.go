@@ -104,10 +104,11 @@ type app struct {
 
 	pending []*pending
 
-	imp        importing
-	agents     *agents.Env     // the agents on this computer
-	agentState []agents.Status // as last read
-	agentErr   map[string]string
+	imp         importing
+	agents      *agents.Env     // the agents on this computer
+	agentState  []agents.Status // as last read
+	showMissing bool            // the agents not installed, unfolded
+	agentErr    map[string]string
 
 	// settings being edited
 	editDays, editRemind, editGrant string

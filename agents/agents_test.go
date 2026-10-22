@@ -169,7 +169,7 @@ func TestCursorNewFileAndBadJSON(t *testing.T) {
 			t.Errorf("mode %v", st.Mode())
 		}
 	}
-	bad := "{\n  // a comment\n  \"mcpServers\": {}\n}\n"
+	bad := "{\n  // a comment\n  \"mcpServers\": {,}\n}\n"
 	write(t, path, bad, 0o644)
 	if _, err := e.Connect(All[1]); err == nil || !strings.Contains(err.Error(), "没有修改") {
 		t.Errorf("err %v", err)
