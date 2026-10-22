@@ -18,6 +18,8 @@
 |---|---|---|
 | ![轮换](docs/screenshots/rotate-light.png) | ![代理](docs/screenshots/settings-agents-light.png) | ![深色](docs/screenshots/list-dark.png) |
 
+更多：[快捷键](docs/screenshots/shortcuts-light.png) · [搜索无结果](docs/screenshots/empty-search-dark.png) · [添加](docs/screenshots/add-light.png)。
+
 Linux（Xvfb + openbox）实机截图：[列表](docs/screenshots/linux-list.png) · [详情](docs/screenshots/linux-detail.png) · [端到端测试里 MCP 请求的批准](docs/screenshots/linux-e2e-approval.png) · [命令行请求（输出不脱敏的提醒）](docs/screenshots/linux-e2e-cli-approval.png)。
 
 ## 为什么

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -326,6 +328,8 @@ func TestScreenshots(t *testing.T) {
 		h.openTab(tabAgents)
 	})
 	shot("settings-general", panelWidth, func(h *harness, tt *ui.Tester) { h.openTab(tabGeneral) })
+	shot("shortcuts", panelWidth, func(h *harness, tt *ui.Tester) { h.cheat = true })
+	shot("empty-search", panelWidth, func(h *harness, tt *ui.Tester) { h.query = "nothing-matches" })
 }
 
 func save(t *testing.T, path string, tt *ui.Tester) {
@@ -338,5 +342,37 @@ func save(t *testing.T, path string, tt *ui.Tester) {
 	defer f.Close()
 	if err := png.Encode(f, tt.Image()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestContrast checks that every text color is WCAG AA (4.5:1) on every
+// surface it sits on, light and dark.
+func TestContrast(t *testing.T) {
+	lum := func(hex string) float64 {
+		var r, g, b int
+		if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b); err != nil {
+			t.Fatal(hex, err)
+		}
+		ch := func(v int) float64 {
+			c := float64(v) / 255
+			if c <= 0.03928 {
+				return c / 12.92
+			}
+			return math.Pow((c+0.055)/1.055, 2.4)
+		}
+		return 0.2126*ch(r) + 0.7152*ch(g) + 0.0722*ch(b)
+	}
+	for dark, p := range colors {
+		for _, fg := range []string{"text", "muted", "faint", "link", "gold", "green", "red", "danger"} {
+			for _, bg := range []string{"bg", "sunk", "card", "code"} {
+				l1, l2 := lum(p[fg]), lum(p[bg])
+				if l1 < l2 {
+					l1, l2 = l2, l1
+				}
+				if r := (l1 + 0.05) / (l2 + 0.05); r < 4.5 {
+					t.Errorf("dark=%v: %s on %s is %.2f:1", dark, fg, bg, r)
+				}
+			}
+		}
 	}
 }
