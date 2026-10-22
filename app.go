@@ -34,6 +34,15 @@ const (
 
 var tabNames = []string{"通用", "AI 代理", "关于"}
 
+// The list's filters.
+const (
+	filterAll = iota
+	filterDue
+	filterDenied
+)
+
+var filterNames = []string{"全部", "需处理", "代理禁用"}
+
 // pending is an agent's request waiting for the user.
 type pending struct {
 	req    approval.Request
@@ -63,6 +72,7 @@ type app struct {
 
 	page    page
 	query   string
+	filter  int // filterAll, filterDue, filterDenied
 	chosen  int
 	detail  string // the key shown
 	tab     int
@@ -143,9 +153,20 @@ func (a *app) rows() []vault.Key {
 	now := a.now()
 	var out []vault.Key
 	for _, k := range a.inv.Keys {
-		if matches(k, a.query) {
-			out = append(out, k)
+		if !matches(k, a.query) {
+			continue
 		}
+		switch a.filter {
+		case filterDue:
+			if st := a.inv.StatusOf(k, now); st.State == vault.OK && st.Pending == 0 {
+				continue
+			}
+		case filterDenied:
+			if k.Agent != "deny" {
+				continue
+			}
+		}
+		out = append(out, k)
 	}
 	slices.SortStableFunc(out, func(x, y vault.Key) int {
 		sx, sy := a.inv.StatusOf(x, now).State, a.inv.StatusOf(y, now).State
@@ -213,6 +234,14 @@ func (a *app) choose(i int) {
 	a.list.ScrollIntoView(a.chosen)
 }
 
+// setFilter shows the list through filter f (wrapping around).
+func (a *app) setFilter(f int) {
+	n := len(filterNames)
+	a.filter = (f%n + n) % n
+	a.chosen = 0
+	a.list.ScrollIntoView(0)
+}
+
 func (a *app) say(msg string) {
 	a.toast = msg
 	at := msg
@@ -229,6 +258,12 @@ func (a *app) openDetail(name string) {
 		return
 	}
 	a.detail, a.page, a.addPlat, a.confirm = name, pageDetail, "", false
+	for i, k := range a.rows() { // the list shows it chosen
+		if k.Name == name {
+			a.chosen = i
+			a.list.ScrollIntoView(i)
+		}
+	}
 }
 
 func (a *app) back() {

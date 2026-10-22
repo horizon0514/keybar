@@ -5,7 +5,7 @@
 - **钥匙串**：macOS 钥匙串 / Windows 凭据管理器 / Linux Secret Service（GNOME Keyring、KWallet）。KeyBar 自己的文件里只有元数据，没有值。
 - **命令行 `keys`**：添加、轮换、按项目注入（`keys run`），导入并粉碎 `.env`。
 - **MCP 服务**：Claude Code、Cursor 等代理通过 `list_keys` 看有哪些 key（只有名字和元数据），通过 `run_with_secrets` 让 KeyBar 带着 key 跑命令，输出里的值被替换成 `[REDACTED:NAME]`。每次使用都要你在菜单栏里批准，全部记日志。
-- **菜单栏 / 托盘**：键盘优先的面板，批准请求、查看清单、轮换；每天提醒超期和快到期的 key，图标上有角标。
+- **菜单栏 / 托盘**：键盘优先的两栏面板（左边清单、右边详情，`⌥←` `⌥→` 切换“全部 / 需处理 / 代理禁用”），批准请求、查看清单、轮换；每天提醒超期和快到期的 key，图标上有角标。
 - **轮换清单**：换新值后自动更新 GitHub Actions secrets 和 Vercel 环境变量，其余平台（Railway、TiDB Cloud、`.env`……）列成清单逐个勾掉。
 
 ![列表](docs/screenshots/list-light.png)

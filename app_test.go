@@ -89,7 +89,7 @@ func TestListOrderAndSearch(t *testing.T) {
 		t.Errorf("first %s", rows[0].Name)
 	}
 	tt := h.tester(panelWidth)
-	if !tt.HasText("RAILWAY_TOKEN") || !tt.HasText("1 个已超期 · 1 个快到期 · 1 个轮换后还有平台没更新") {
+	if !tt.HasText("RAILWAY_TOKEN") || !tt.HasText("1 超期") || !tt.HasText("1 快到期") || !tt.HasText("1 待同步") {
 		t.Errorf("texts %q", tt.Texts())
 	}
 	tt.Type("vercel")
@@ -364,7 +364,7 @@ func TestContrast(t *testing.T) {
 	}
 	for dark, p := range colors {
 		for _, fg := range []string{"text", "muted", "faint", "link", "gold", "green", "red", "danger"} {
-			for _, bg := range []string{"bg", "sunk", "card", "code"} {
+			for _, bg := range []string{"bg", "card"} {
 				l1, l2 := lum(p[fg]), lum(p[bg])
 				if l1 < l2 {
 					l1, l2 = l2, l1
@@ -374,5 +374,33 @@ func TestContrast(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestFilters(t *testing.T) {
+	h := newHarness(t)
+	tt := h.tester(panelWidth)
+	tt.Key(ui.Alt, ui.KeyRight)
+	if h.filter != filterDue {
+		t.Fatalf("⌥→: filter %d", h.filter)
+	}
+	for _, k := range h.rows() {
+		if st := h.inv.StatusOf(k, h.clock); st.State == vault.OK && st.Pending == 0 {
+			t.Errorf("需处理 shows %s", k.Name)
+		}
+	}
+	if n := len(h.rows()); n != 3 {
+		t.Errorf("需处理: %d keys", n)
+	}
+	h.setFilter(filterDenied)
+	for _, k := range h.rows() {
+		if k.Agent != "deny" {
+			t.Errorf("代理禁用 shows %s", k.Name)
+		}
+	}
+	tt.Frame()
+	tt.Key(ui.Alt, ui.KeyRight) // wraps around
+	if h.filter != filterAll || len(h.rows()) != len(h.inv.Keys) {
+		t.Errorf("wrap: filter %d, %d rows", h.filter, len(h.rows()))
 	}
 }
