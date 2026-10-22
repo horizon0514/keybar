@@ -1,0 +1,30 @@
+# Build outputs
+/build/
+/.mygo/
+/dist/
+mygo_windows_*.syso
+/keybar
+*.app/
+*.dmg
+*.zip
+*.exe
+*.test
+*.out
+
+# Test output (TestScreenshots; a few live in docs/screenshots)
+/shots/
+
+# Secrets: KeyBar exists so that these are not needed
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+ipc.json
+
+# Editors, OS
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp

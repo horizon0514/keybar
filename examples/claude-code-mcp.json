@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "keybar": {
+      "type": "stdio",
+      "command": "/Applications/KeyBar.app/Contents/MacOS/KeyBar",
+      "args": ["mcp", "--client", "claude-code"]
+    }
+  }
+}

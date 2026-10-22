@@ -1,0 +1,146 @@
+name: Release
+
+# Builds KeyBar for every platform on its own runner, tests it there first,
+# and packages it:
+#   macOS    KeyBar-<v>-macos-universal.zip            (ad hoc, dev.horizon.keybar)
+#   Windows  KeyBar-<v>-windows-{amd64,arm64}-setup.exe, -portable.zip (unsigned)
+#   Linux    keybar_<v>_{amd64,arm64}.deb, keybar-<v>-linux-{amd64,arm64}.tar.gz
+# Each run keeps them, and a screenshot of the app on the example data, as
+# artifacts. A pushed tag v* also publishes them, with SHA256SUMS.txt, as
+# the GitHub release of that tag (made, or updated when it exists).
+# No secrets: nothing is signed for distribution, and no real keychain
+# item or API is used.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS universal, os: macos-latest, platform: darwin/universal, pkg: macos }
+          - { name: Windows x64 + arm64, os: windows-latest, platform: "windows/amd64,windows/arm64", pkg: windows }
+          - { name: Linux x64, os: ubuntu-latest, platform: linux/amd64, pkg: linux }
+          - { name: Linux arm64, os: ubuntu-24.04-arm, platform: linux/arm64, pkg: linux }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check the version
+        run: |
+          v=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json | head -1)
+          grep -q "const version = \"$v\"" main.go || { echo "::error::main.go's version is not $v"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$v" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME but mygo.json says $v"; exit 1
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Vet
+        run: go vet ./... && go tool mygo vet .
+      - name: Test
+        env:
+          CGO_ENABLED: "0"
+        run: go test -short ./...
+
+      - name: Build
+        run: go tool mygo build -platform "${{ matrix.platform }}" -skip-dmg
+      - name: Package
+        run: bash scripts/package.sh ${{ matrix.pkg }}
+      - name: Check the macOS signature
+        if: runner.os == 'macOS'
+        run: |
+          codesign -dv --verbose=2 "build/darwin-universal/KeyBar.app" 2>&1 | grep -q 'Identifier=dev.horizon.keybar'
+          codesign -dr - "build/darwin-universal/KeyBar.app" 2>&1 | grep -q 'identifier "dev.horizon.keybar"'
+          lipo -archs "build/darwin-universal/KeyBar.app/Contents/MacOS/KeyBar"
+
+      # A look at the app on each system, on the example data; it does not
+      # fail the build.
+      - name: Screenshot (Linux, Xvfb)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb openbox xdotool imagemagick x11-xserver-utils dbus-x11 \
+            libgtk-3-0t64 libayatana-appindicator3-1 libsecret-1-0 fonts-noto-cjk
+          a=${{ matrix.platform }}; a=${a#linux/}
+          bash scripts/screenshot-linux.sh "build/linux-$a/keybar" "build/screenshots"
+      - name: Screenshot (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          mkdir -p build/screenshots
+          KEYBAR_DEMO=1 "build/darwin-universal/KeyBar.app/Contents/MacOS/KeyBar" > build/screenshots/app.log 2>&1 &
+          sleep 15
+          screencapture -x build/screenshots/macos.png
+          kill $! || true
+      - name: Screenshot (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/screenshots | Out-Null
+          $env:KEYBAR_DEMO = "1"
+          $p = Start-Process -FilePath "build/windows-amd64/KeyBar.exe" -PassThru
+          Start-Sleep -Seconds 15
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+          $bmp.Save("build/screenshots/windows.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          Stop-Process -Id $p.Id -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keybar-${{ env.VERSION }}-${{ matrix.pkg }}-${{ runner.arch }}
+          path: build/dist/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ matrix.pkg }}-${{ runner.arch }}
+          path: build/screenshots/
+          if-no-files-found: ignore
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: keybar-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum * | tee SHA256SUMS.txt
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "KeyBar ${tag#v}" --generate-notes
+          fi

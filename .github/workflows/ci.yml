@@ -1,0 +1,86 @@
+name: CI
+
+# Tests on every push and pull request, natively on macOS, Windows and
+# Linux (x64 and arm64), vets every target from Linux, and runs the
+# end-to-end script on Linux against a throwaway gnome-keyring. No secrets:
+# the tests use an in-memory keychain and dummy values.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: vet
+        shell: bash
+        run: go vet ./... && go tool mygo vet .
+      - name: test
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: go test -short ./...
+      - name: test -race
+        if: runner.os != 'Windows'
+        shell: bash
+        run: go test -short -race ./...
+
+  cross:
+    name: vet every target
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: vet and compile for every platform
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -e
+          for t in darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
+            echo "== $t"
+            GOOS=${t%/*} GOARCH=${t#*/} go vet ./...
+            GOOS=${t%/*} GOARCH=${t#*/} go test -short -c -o /dev/null . 
+          done
+      - name: build all platforms (no installers)
+        run: go tool mygo build -platform darwin/universal,windows/amd64,linux/amd64,linux/arm64
+
+  e2e:
+    name: end to end (Linux, real Secret Service)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb openbox xdotool imagemagick x11-xserver-utils dbus-x11 \
+            gnome-keyring libgtk-3-0t64 libayatana-appindicator3-1 libsecret-1-0 fonts-noto-cjk
+      - name: Build
+        run: go tool mygo build -platform linux/amd64
+      - name: CLI + MCP + approval in the app, with dummy values
+        run: bash scripts/e2e-linux.sh build/linux-amd64/keybar build/e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-linux
+          path: build/e2e/
+          if-no-files-found: ignore
