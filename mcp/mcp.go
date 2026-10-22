@@ -136,9 +136,11 @@ func (s *Server) handle(m message) (any, *rpcError) {
 			"protocolVersion": v,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "keybar", "title": "KeyBar", "version": s.Version},
-			"instructions": "KeyBar keeps the user's API keys in the system keychain. Use list_keys to see what exists (names and metadata only). " +
-				"To use keys, call run_with_secrets: it runs a command with the keys as environment variables and returns its output with the values redacted. " +
-				"Each use needs the user's approval, which may take a while. Use request_secret only when a raw value is unavoidable; never print, store or commit a value.",
+			"instructions": "KeyBar keeps the user's API keys in the system keychain instead of .env files. " +
+				"When a command needs API keys (tests, scripts, dev servers, deploys), call run_with_secrets with the command and the project's directory as cwd: " +
+				"KeyBar finds the variables the project uses (names in .env.example / .env.sample / .env, from cwd up to the git root) and injects the keys it holds under those names, " +
+				"after the user approves, and returns the output with every value replaced by [REDACTED:NAME]. Pass keys to choose them yourself; list_keys shows what exists (no values). " +
+				"Do not ask the user to paste keys or to create .env files. Avoid request_secret: it puts a raw value into the conversation.",
 		}, nil
 	case "notifications/initialized", "notifications/cancelled":
 		return nil, nil
@@ -205,30 +207,32 @@ func tools() []map[string]any {
 	ro := map[string]any{"readOnlyHint": true, "openWorldHint": false}
 	return []map[string]any{
 		{
-			"name": "list_keys", "title": "List keys",
-			"description": "List the API keys KeyBar manages: names, descriptions, tags, the projects using them, where else they are stored, rotation status. Never returns values.",
-			"inputSchema": schema(map[string]any{"query": str("Filter by name, description, tag or project (optional)")}),
-			"annotations": ro,
-		},
-		{
-			"name": "run_with_secrets", "title": "Run a command with keys",
-			"description": "Run a command with KeyBar keys injected as environment variables, after the user approves. Returns exit code, stdout and stderr, with every secret value replaced by [REDACTED:NAME]. " +
-				"Give the keys as `keys` (env var = key name), as `env` (env var -> key name), or use the project's keys.toml (`project`, or found from `cwd`). Prefer this over request_secret.",
+			"name": "run_with_secrets", "title": "Run a command with the user's API keys",
+			"description": "The way to use the user's API keys: run a command with them as environment variables, after the user approves in KeyBar. " +
+				"Returns the exit code, stdout and stderr, with every secret value replaced by [REDACTED:NAME]; the values never reach you. " +
+				"Without `keys`, KeyBar injects what the project needs: each variable named in .env.example / .env.sample / .env (from cwd up to the git root) that KeyBar holds a key of that name for (a keys.toml can map names). " +
+				"Set `keys` to choose the keys yourself (each injected under its own name; see list_keys).",
 			"inputSchema": schema(map[string]any{
 				"command":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Program and arguments, e.g. [\"npm\",\"test\"]; a single string runs through the shell"},
-				"keys":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Key names, each injected under its own name"},
-				"env":             map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Env var name -> KeyBar key name"},
-				"project":         str("Path to a keys.toml (optional; else found from cwd when neither keys nor env is given)"),
-				"cwd":             str("Working directory (absolute)"),
+				"cwd":             str("The project's directory (absolute): where the command runs and the keys are found"),
+				"keys":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional: key names to inject, each under its own name. Leave out to use what the project needs"},
 				"timeout_seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Default 120"},
 				"reason":          str("Why the keys are needed; shown to the user"),
 			}, "command"),
 			"annotations": map[string]any{"destructiveHint": true, "openWorldHint": true},
 		},
 		{
-			"name": "request_secret", "title": "Reveal a key's value",
-			"description": "Return one key's raw value, after the user approves. Last resort: prefer run_with_secrets, which never exposes values. Never print, log, store or commit the value.",
-			"inputSchema": schema(map[string]any{"name": str("The key's name"), "reason": str("Why the raw value is needed; shown to the user")}, "name"),
+			"name": "list_keys", "title": "List keys",
+			"description": "List the API keys KeyBar manages: names, descriptions, tags, the projects using them, where else they are stored, rotation status. Never returns values.",
+			"inputSchema": schema(map[string]any{"query": str("Filter by name, description, tag or project (optional)")}),
+			"annotations": ro,
+		},
+		{
+			"name": "request_secret", "title": "Reveal a key's raw value (discouraged)",
+			"description": "Discouraged: returns one key's raw value into this conversation, where it can leak into logs, files and transcripts. " +
+				"Use run_with_secrets instead: it runs your command with the key and you never see the value. " +
+				"Only when the user explicitly asks for the value itself, and after they approve. Never print, log, store or commit it.",
+			"inputSchema": schema(map[string]any{"name": str("The key's name"), "reason": str("Why run_with_secrets cannot do; shown to the user")}, "name", "reason"),
 			"annotations": map[string]any{"readOnlyHint": true, "openWorldHint": false},
 		},
 	}
@@ -340,8 +344,7 @@ func (s *Server) runWithSecrets(args json.RawMessage) any {
 	var a struct {
 		Command json.RawMessage   `json:"command"`
 		Keys    []string          `json:"keys"`
-		Env     map[string]string `json:"env"`
-		Project string            `json:"project"`
+		Env     map[string]string `json:"env"` // 0.1: variable → key
 		Cwd     string            `json:"cwd"`
 		Timeout int               `json:"timeout_seconds"`
 		Reason  string            `json:"reason"`
@@ -354,7 +357,7 @@ func (s *Server) runWithSecrets(args json.RawMessage) any {
 	if json.Unmarshal(a.Command, &line) == nil && line != "" {
 		argv = runner.Shell(line)
 	} else if json.Unmarshal(a.Command, &argv) != nil || len(argv) == 0 {
-		return text("command 应是字符串数组，如 [\"npm\",\"test\"]", true)
+		return text("command 应是字符串数组，如 [\"npm\",\"test\"]，或一行命令", true)
 	} else {
 		line = runner.Display(argv)
 	}
@@ -369,27 +372,55 @@ func (s *Server) runWithSecrets(args json.RawMessage) any {
 	for v, k := range a.Env {
 		env[v] = k
 	}
-	if a.Project != "" || len(env) == 0 {
-		path := a.Project
-		if path == "" {
-			dir := cwd
-			if dir == "" {
-				dir, _ = os.Getwd()
-			}
-			p, ok := project.Find(dir)
-			if !ok {
-				return text("没指定 keys 或 env，也没找到 keys.toml", true)
-			}
-			path = p
+	var notes []string
+	if len(env) == 0 {
+		dir := cwd
+		if dir == "" {
+			dir, _ = os.Getwd()
 		}
-		f, err := project.Load(path)
+		inv, err := s.Vault.Inventory()
 		if err != nil {
 			return text(err.Error(), true)
 		}
-		for v, k := range f.Env {
-			if _, ok := env[v]; !ok {
-				env[v] = k
+		// Keys agents may not use are left out, not asked for.
+		var denied []string
+		usable := func(n string) bool {
+			k, ok := inv.Find(n)
+			if ok && k.Agent == "deny" {
+				denied = append(denied, n)
+				return false
 			}
+			return ok
+		}
+		r, err := project.Resolve(dir, usable)
+		if err != nil {
+			return text(err.Error(), true)
+		}
+		env = r.Env
+		for v, k := range env {
+			if slices.Contains(denied, k) || r.Toml != "" && slices.Contains(r.TomlMissing, k) {
+				delete(env, v)
+			}
+		}
+		if len(denied) > 0 {
+			slices.Sort(denied)
+			notes = append(notes, "not injected (the user does not let agents use them): "+strings.Join(slices.Compact(denied), ", "))
+		}
+		var miss []string
+		for _, n := range append(r.TomlMissing, r.Missing...) {
+			if !slices.Contains(denied, n) {
+				miss = append(miss, n)
+			}
+		}
+		if len(miss) > 0 {
+			notes = append(notes, "not in KeyBar, skipped: "+strings.Join(miss, ", "))
+		}
+		if len(env) == 0 {
+			msg := fmt.Sprintf("在 %s 没找到可注入的密钥：这里到仓库根没有 .env.example / .env.sample / .env，或其中的变量名 KeyBar 里都没有。用 list_keys 看有哪些，再在 keys 里列出。", dir)
+			if len(notes) > 0 {
+				msg += "\n" + strings.Join(notes, "\n")
+			}
+			return text(msg, true)
 		}
 	}
 	for v := range env {
@@ -421,6 +452,15 @@ func (s *Server) runWithSecrets(args json.RawMessage) any {
 	}
 	r := runner.Capture(s.ctx, argv, inject, values, cwd, timeout, nil)
 	var b strings.Builder
+	vars := make([]string, 0, len(env))
+	for v := range env {
+		vars = append(vars, v)
+	}
+	slices.Sort(vars)
+	fmt.Fprintf(&b, "injected: %s\n", strings.Join(vars, ", "))
+	for _, n := range notes {
+		fmt.Fprintln(&b, n)
+	}
 	switch {
 	case r.Err != nil:
 		fmt.Fprintf(&b, "无法启动：%v\n", r.Err)

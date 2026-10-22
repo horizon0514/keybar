@@ -2,8 +2,10 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"time"
 
+	"keybar/agents"
 	"keybar/approval"
 	"keybar/vault"
 )
@@ -71,6 +73,29 @@ func seedDemo(v *vault.Vault, now time.Time) {
 	} {
 		_ = v.Log(e)
 	}
+}
+
+// demoAgents is a home folder with Claude Code connected, Cursor not, and
+// no Codex: the example's, never the user's settings.
+func demoAgents(exe string) *agents.Env {
+	home, _ := os.MkdirTemp("", "keybar-demo-home-")
+	e := &agents.Env{Home: home, Exe: exe, LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
+	_ = os.MkdirAll(filepath.Join(home, ".cursor"), 0o755)
+	_ = os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{}\n"), 0o600)
+	_, _ = e.Connect(agents.All[0])
+	return e
+}
+
+// demoEnvFile is an example project's .env: one new key, one KeyBar has
+// with the same value, two with other values, one repeated, one empty.
+func demoEnvFile() string {
+	dir, _ := os.MkdirTemp("", "keybar-demo-")
+	dir = filepath.Join(dir, "my-app")
+	_ = os.MkdirAll(dir, 0o755)
+	p := filepath.Join(dir, ".env")
+	_ = os.WriteFile(p, []byte("# example values only\nOPENAI_API_KEY=sk-example-openai-other\nDEEPSEEK_API_KEY=sk-example-deepseek-0000\n"+
+		"STRIPE_SECRET_KEY=sk-example-stripe-0001\nRAILWAY_TOKEN=example-railway-other\nSENTRY_DSN=\nSTRIPE_SECRET_KEY=sk-example-stripe-0002\n"), 0o600)
+	return p
 }
 
 func demoRequest() approval.Request {

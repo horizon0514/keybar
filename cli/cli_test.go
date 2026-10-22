@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"keybar/agents"
 	"keybar/approval"
 	"keybar/remote"
 	"keybar/vault"
@@ -230,9 +231,9 @@ func TestImport(t *testing.T) {
 	if v, _ := x.env.Vault.Value("DB_URL"); string(v) != dummy2 {
 		t.Errorf("DB_URL %q", v)
 	}
-	b, err := os.ReadFile(filepath.Join(x.wd, "keys.toml"))
-	if err != nil || !strings.Contains(string(b), `DB_URL = "DB_URL"`) || strings.Contains(string(b), dummy1) {
-		t.Errorf("keys.toml %s %v", b, err)
+	// Names are the variables': no keys.toml needed.
+	if _, err := os.Stat(filepath.Join(x.wd, "keys.toml")); err == nil {
+		t.Error("wrote keys.toml with nothing renamed")
 	}
 	// EMPTY was skipped: the file stays.
 	if _, err := os.Stat(path); err != nil {
@@ -242,10 +243,221 @@ func TestImport(t *testing.T) {
 	if c := x.run("", "import", path, "--shred"); c != 0 {
 		t.Fatal(x.err.String())
 	}
+	if !strings.Contains(x.out.String(), "已有相同值 1 个") {
+		t.Errorf("same value not counted: %s", x.out.String())
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error(".env not shredded")
 	}
 	x.noValues()
+}
+
+// importConflicts sets up KeyBar with A, B, C and a project's .env that
+// has A (same value), B and C (other values), D (new) and D twice.
+func importConflicts(t *testing.T) (*h, string) {
+	x := newH(t)
+	x.run("value-a-0000", "add", "A")
+	x.run(dummy1, "add", "B", "--platform", "railway:api")
+	x.run("value-c-0000", "add", "C")
+	dir := filepath.Join(x.wd, "My App")
+	_ = os.MkdirAll(dir, 0o755)
+	path := filepath.Join(dir, ".env")
+	_ = os.WriteFile(path, []byte("A=value-a-0000\nB="+dummy2+"\nD=first-d-0000\nC=other-c-1111\nD=last-d-2222\n"), 0o600)
+	return x, path
+}
+
+func (x *h) value(name string) string {
+	v, _ := x.env.Vault.Value(name)
+	return string(v)
+}
+
+func (x *h) printedNoValues() {
+	x.t.Helper()
+	for _, v := range []string{dummy1, dummy2, "value-a-0000", "other-c-1111", "first-d-0000", "last-d-2222", "value-c-0000"} {
+		if strings.Contains(x.out.String(), v) || strings.Contains(x.err.String(), v) {
+			x.t.Errorf("printed a value %q", v)
+		}
+	}
+}
+
+func TestImportConflictsNonInteractive(t *testing.T) {
+	x, path := importConflicts(t)
+	// Without a terminal: conflicts are kept, and said so.
+	if c := x.run("", "import", path); c != 0 {
+		t.Fatal(x.err.String())
+	}
+	out := x.out.String()
+	if !strings.Contains(out, "新增 1 个，已有相同值 1 个，保留现有 2 个") || !strings.Contains(out, "--on-conflict overwrite") {
+		t.Errorf("summary: %s", out)
+	}
+	if !strings.Contains(x.err.String(), "D 在文件里出现了 2 次（第 3、5 行），用最后一次（第 5 行）") {
+		t.Errorf("repeat warning: %s", x.err.String())
+	}
+	if x.value("D") != "last-d-2222" || x.value("B") != dummy1 || x.value("C") != "value-c-0000" {
+		t.Error("wrong values kept")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Error(".env removed though values were not imported")
+	}
+	x.printedNoValues()
+
+	// overwrite: B and C replaced, as rotations.
+	if c := x.run("", "import", path, "--on-conflict=overwrite"); c != 0 {
+		t.Fatal(x.err.String())
+	}
+	if x.value("B") != dummy2 || x.value("C") != "other-c-1111" {
+		t.Error("not overwritten")
+	}
+	inv, _ := x.env.Vault.Inventory()
+	b, _ := inv.Find("B")
+	if len(b.History) != 1 || !strings.Contains(b.History[0].Note, "导入") || len(b.Pending()) != 1 {
+		t.Errorf("not a rotation: %+v", b)
+	}
+	if !strings.Contains(x.out.String(), "覆盖 2 个") || !strings.Contains(x.out.String(), "keys show B") {
+		t.Errorf("%s", x.out.String())
+	}
+	x.printedNoValues()
+	x.noValues()
+}
+
+func TestImportRename(t *testing.T) {
+	x, path := importConflicts(t)
+	if c := x.run("", "import", path, "--on-conflict", "rename"); c != 0 {
+		t.Fatal(x.err.String())
+	}
+	// NAME_PROJECT, the folder's name sanitized.
+	if x.value("B_MY_APP") != dummy2 || x.value("C_MY_APP") != "other-c-1111" || x.value("B") != dummy1 {
+		t.Error("not renamed")
+	}
+	toml, err := os.ReadFile(filepath.Join(filepath.Dir(path), "keys.toml"))
+	if err != nil || !strings.Contains(string(toml), `B = "B_MY_APP"`) || strings.Contains(string(toml), `A = `) {
+		t.Errorf("mapping: %s %v", toml, err)
+	}
+	// keys run in the project gives B the renamed key, A its own.
+	x.tty = true
+	x.wd = filepath.Dir(path)
+	if c := x.run("", "run", "--", "env"); c != 0 {
+		t.Fatal(x.err.String())
+	}
+	if !slices.Contains(x.ran.Env, "B="+dummy2) || !slices.Contains(x.ran.Env, "A=value-a-0000") {
+		t.Errorf("run after rename: %v", x.err.String())
+	}
+	// Importing again: the renamed ones are the same now, and the
+	// suggestion moves on to _2 for a third value.
+	x.tty = false
+	_ = os.WriteFile(path, []byte("B=third-b-3333\n"), 0o600)
+	x.run("", "import", path, "--on-conflict", "rename")
+	if x.value("B_MY_APP_2") != "third-b-3333" {
+		t.Errorf("second rename: %s", x.out.String())
+	}
+	x.printedNoValues()
+	x.noValues()
+}
+
+func TestImportInteractive(t *testing.T) {
+	x, path := importConflicts(t)
+	x.run("value-z-0000", "add", "Z")
+	x.tty = true
+	// B: rename, first to C (the file's), then Z (KeyBar's, another
+	// value), then CUSTOM_B;
+	// C: overwrite; then no to shredding.
+	if c := x.run("r\nC\nZ\nCUSTOM_B\no\nn\n", "import", path); c != 0 {
+		t.Fatal(x.err.String())
+	}
+	if x.value("CUSTOM_B") != dummy2 || x.value("C") != "other-c-1111" || x.value("B") != dummy1 {
+		t.Errorf("choices not applied: %s %s", x.out.String(), x.err.String())
+	}
+	if !strings.Contains(x.err.String(), "改名导入为 B_MY_APP") || !strings.Contains(x.err.String(), "C 是这个文件里另一个变量要用的名字") || !strings.Contains(x.err.String(), "KeyBar 里已有 Z（值不同）") {
+		t.Errorf("prompts: %s", x.err.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Error("shredded after no")
+	}
+	// The input ends: the rest are kept.
+	_ = os.WriteFile(path, []byte("A=changed-a-4444\n"), 0o600)
+	if c := x.run("", "import", path); c != 0 || x.value("A") != "value-a-0000" {
+		t.Errorf("EOF: %d %s", c, x.err.String())
+	}
+	x.tty = false
+	if c := x.run("", "import", path, "--on-conflict", "ask"); c != 2 {
+		t.Error("ask without a terminal")
+	}
+	if c := x.run("", "import", path, "--on-conflict", "replace"); c != 2 {
+		t.Error("bad --on-conflict accepted")
+	}
+	x.printedNoValues()
+}
+
+func TestRunAutoDetect(t *testing.T) {
+	x := newH(t)
+	x.run(dummy1, "add", "OPENAI_API_KEY")
+	x.run(dummy2, "add", "UNRELATED")
+	_ = os.MkdirAll(filepath.Join(x.wd, ".git"), 0o755)
+	sub := filepath.Join(x.wd, "pkg", "api")
+	_ = os.MkdirAll(sub, 0o755)
+	_ = os.WriteFile(filepath.Join(x.wd, ".env.example"), []byte("# names only\nOPENAI_API_KEY=your-key-here\nPORT=3000\n"), 0o644)
+	x.wd = sub
+	x.tty = true
+	if c := x.run("", "run", "--", "node", "server.js"); c != 0 {
+		t.Fatal(x.err.String())
+	}
+	if !slices.Contains(x.ran.Env, "OPENAI_API_KEY="+dummy1) || slices.Contains(x.ran.Env, "UNRELATED="+dummy2) {
+		t.Error("wrong keys injected")
+	}
+	if slices.Contains(x.ran.Env, "OPENAI_API_KEY=your-key-here") || slices.Contains(x.ran.Env, "PORT=3000") {
+		t.Error("used the example's values")
+	}
+	if e := x.err.String(); !strings.Contains(e, "注入 OPENAI_API_KEY") || !strings.Contains(e, "KeyBar 里没有 PORT，跳过") {
+		t.Errorf("note: %q", e)
+	}
+	// Without a terminal it asks, for exactly those keys.
+	x.tty = false
+	x.run("", "run", "--", "node", "server.js")
+	if len(x.asked) != 1 || strings.Join(x.asked[0].Keys, ",") != "OPENAI_API_KEY" {
+		t.Errorf("asked %+v", x.asked)
+	}
+	// Nothing to inject: it runs, unasked, and says so.
+	x.wd = t.TempDir()
+	if c := x.run("", "run", "--", "make"); c != 0 || len(x.asked) != 1 || !strings.Contains(x.err.String(), "没找到要注入的密钥") {
+		t.Errorf("empty: %d %s", c, x.err.String())
+	}
+	x.noValues()
+}
+
+func TestConnect(t *testing.T) {
+	x := newH(t)
+	home := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(home, ".cursor"), 0o755)
+	_ = os.MkdirAll(filepath.Join(home, ".codex"), 0o755)
+	x.env.Agents = &agents.Env{Home: home, Exe: "/opt/keybar/keybar", LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
+	if c := x.run("", "connect"); c != 0 {
+		t.Fatalf("%d %s %s", c, x.out.String(), x.err.String())
+	}
+	out := x.out.String()
+	if !strings.Contains(out, "● Cursor") || !strings.Contains(out, "● Codex") || !strings.Contains(out, "  Claude Code  未安装") {
+		t.Errorf("%s", out)
+	}
+	b, _ := os.ReadFile(filepath.Join(home, ".cursor", "mcp.json"))
+	if !strings.Contains(string(b), `"/opt/keybar/keybar"`) {
+		t.Errorf("cursor: %s", b)
+	}
+	x.run("", "connect", "--status")
+	if !strings.Contains(x.out.String(), "● Codex        已连接") {
+		t.Errorf("status: %s", x.out.String())
+	}
+	if c := x.run("", "connect", "claude"); c != 1 {
+		t.Error("connected a missing agent")
+	}
+	if c := x.run("", "disconnect", "cursor"); c != 0 {
+		t.Fatal(x.err.String())
+	}
+	b, _ = os.ReadFile(filepath.Join(home, ".cursor", "mcp.json"))
+	if strings.Contains(string(b), "keybar") {
+		t.Errorf("not disconnected: %s", b)
+	}
+	if c := x.run("", "connect", "vim"); c != 2 {
+		t.Error("unknown agent")
+	}
 }
 
 func TestRotateSyncChecklist(t *testing.T) {

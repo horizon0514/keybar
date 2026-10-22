@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"keybar/agents"
 	"keybar/approval"
 	"keybar/vault"
 
@@ -32,6 +34,8 @@ var (
 	iconKey    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></svg>`))
 	iconBot    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>`))
 	iconInfo   = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>`))
+	iconImport = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>`))
+	iconFile   = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>`))
 	iconX      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`))
 )
 
@@ -103,6 +107,8 @@ func (a *app) view(c *ui.Context) {
 		a.logView(c, k)
 	case pageSettings:
 		a.settingsView(c, k)
+	case pageImport:
+		a.importView(c, k)
 	default:
 		a.mainView(c, k)
 	}
@@ -135,6 +141,8 @@ func (a *app) keysList(c *ui.Context) {
 		a.setFilter(filterDenied)
 	case c.Shortcut(ui.Cmd, ui.KeyN):
 		a.openAdd()
+	case c.Shortcut(ui.Cmd, ui.KeyI):
+		a.openImport()
 	case c.Shortcut(ui.Cmd, ui.KeyR):
 		if k, ok := a.chosenKey(); ok {
 			a.openRotate(k.Name)
@@ -225,7 +233,7 @@ func (a *app) mainView(c *ui.Context, k ink) {
 		if a.page == pageDetail {
 			a.hintBar(c, k, left, hint("⌘R", "轮换", "⌘C", "复制值", "⌘⌫", "删除", "esc", "返回列表"))
 		} else {
-			a.hintBar(c, k, left, hint("↑↓", "选择", "↵", "详情", "⌘R", "轮换", "⌘N", "添加", "⌘1–3", "筛选", "⌘/", "快捷键"))
+			a.hintBar(c, k, left, hint("↑↓", "选择", "↵", "详情", "⌘N", "添加", "⌘I", "导入", "⌘1–3", "筛选", "⌘/", "快捷键"))
 		}
 	})
 	if open && a.page == pageDetail {
@@ -286,6 +294,7 @@ func (a *app) header(c *ui.Context, k ink) {
 			chip(len(a.inv.Keys), "个都正常", k.green)
 		}
 		iconButton(c.Key("add"), k, iconPlus, "添加密钥  "+hk("⌘N"), a.openAdd)
+		iconButton(c.Key("import"), k, iconImport, "导入 .env  "+hk("⌘I"), a.openImport)
 		iconButton(c.Key("log"), k, iconLog, "访问记录  "+hk("⌘Y"), a.openLog)
 		iconButton(c.Key("gear"), k, iconGear, "设置  "+hk("⌘,"), a.openSettings)
 	})
@@ -328,7 +337,7 @@ func (a *app) listPane(c *ui.Context, k ink) {
 		a.row(c.Key(rows[i].Name), k, i, rows[i])
 	}).Grow(1).MinHeight(0).Padding(6, 8).Gap(2).Label("密钥列表").Children(func() {
 		if len(rows) == 0 {
-			msg := "还没有密钥。" + hk("⌘N") + " 添加，或在终端运行 keys import .env 导入现有的 .env。"
+			msg := "还没有密钥。" + hk("⌘I") + " 导入项目里的 .env，或 " + hk("⌘N") + " 添加一个。"
 			switch {
 			case len(a.inv.Keys) > 0 && a.query != "":
 				msg = "没有匹配「" + a.query + "」的密钥。"
@@ -733,7 +742,7 @@ func section(c *ui.Context, k ink, title, desc string, body func()) {
 
 // option is a row with a switch on its right.
 func option(c *ui.Context, k ink, label, desc string, on *bool, changed func()) {
-	ui.Row(c.Key(label)).Gap(12).Padding(9, 14).Radius(10).BorderWidth(1).BorderColor(k.line).AlignItems(ui.Center).Children(func() {
+	ui.Row(c.Key(label)).Gap(12).Padding(4, 0).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).Gap(3).Children(func() {
 			ui.Text(c, label).FontSize(13)
 			if desc != "" {
@@ -863,7 +872,7 @@ func (a *app) logView(c *ui.Context, k ink) {
 }
 
 var actionNames = map[string]string{"get": "读取", "reveal": "读明文", "run": "运行", "copy": "复制", "rotate": "轮换", "add": "添加",
-	"rm": "删除", "sync": "同步", "import": "导入", "list": "列出"}
+	"rm": "删除", "sync": "同步", "import": "导入", "list": "列出", "connect": "连接代理", "disconnect": "断开代理"}
 
 func (a *app) eventRow(c *ui.Context, k ink, ev vault.Event, keys bool) {
 	col := k.muted
@@ -991,6 +1000,9 @@ func (a *app) settingsView(c *ui.Context, k ink) {
 			a.openTab(i)
 		}
 	}
+	if a.tab == tabAgents && c.Shortcut(ui.Cmd, ui.KeyEnter) {
+		a.connectAll()
+	}
 	ui.Column(c).Fill().Children(func() {
 		a.head(c, k, "设置", func() { ui.Text(c, "KeyBar "+version).FontSize(11).TextColor(k.faint) })
 		ui.Row(c.Key("body")).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
@@ -1023,7 +1035,11 @@ func (a *app) settingsView(c *ui.Context, k ink) {
 			})
 		})
 		ui.Divider(c)
-		a.hintBar(c, k, a.toast, hint("⌘1–3", "切换", "⇥", "下一项", "↵", "确定", "esc", "返回"))
+		hints := hint("⌘1–3", "切换", "⇥", "下一项", "↵", "确定", "esc", "返回")
+		if a.tab == tabAgents && a.toConnect() > 0 {
+			hints = hint("⌘↵", "全部连接", "⌘1–3", "切换", "esc", "返回")
+		}
+		a.hintBar(c, k, a.toast, hints)
 	})
 }
 
@@ -1095,7 +1111,8 @@ func barName() string {
 }
 
 func (a *app) tabAgents(c *ui.Context, k ink) {
-	section(c, k, "批准", "代理（Claude Code、Cursor…）通过 MCP 申请用密钥时，这里弹出请求：允许一次、限时允许或拒绝。按代理和密钥分别授权。", func() {
+	a.connectSection(c, k)
+	section(c, k, "批准", "代理每次用密钥，这里都会弹出请求：允许一次、限时允许或拒绝，按代理和密钥分别授权。", func() {
 		numberField(c, k, "grant", "限时允许", "分钟", &a.editGrant, a.settings.GrantMinutes, func() { a.applyNumber("grant") })
 		cli := a.settings.CLIApproval
 		option(c, k, "命令行非交互使用也要批准", "没有终端时（如代理在 shell 里运行 keys get / keys run），同样弹出请求。", &cli, func() {
@@ -1117,17 +1134,102 @@ func (a *app) tabAgents(c *ui.Context, k ink) {
 		}
 		if len(gs) > 0 {
 			ui.Row(c.Key("revoke")).Children(func() {
-				ui.Button(c.Key("b"), "全部撤销").OnClick(func() { a.grants.Revoke(""); a.say("已撤销全部授权") })
+				smallButton(c.Key("b"), k, "全部撤销", "", k.muted, func() { a.grants.Revoke(""); a.say("已撤销全部授权") })
 			})
 		}
 	})
-	section(c, k, "MCP 配置", "加到 Claude Code（~/.claude.json 或 claude mcp add）或 Cursor（~/.cursor/mcp.json）的 MCP 设置里：", func() {
-		ui.Text(c.Key("cfg"), a.mcpConfig("claude-code")).FontSize(11).Font("monospace").Padding(10, 12).Radius(8).Background(k.card).LineHeight(1.4).Selectable()
+	section(c, k, "其它代理", "支持 MCP 的代理都能用：命令是本程序，参数 mcp --client 名字。", func() {
 		ui.Row(c.Key("copycfg")).Gap(8).Children(func() {
-			ui.Button(c.Key("cc"), "复制 Claude Code 配置").OnClick(func() { a.copy(a.mcpConfig("claude-code")); a.say("已复制") })
-			ui.Button(c.Key("cur"), "复制 Cursor 配置").OnClick(func() { a.copy(a.mcpConfig("cursor")); a.say("已复制") })
+			smallButton(c.Key("json"), k, "复制 MCP 配置", "", k.link, func() { a.copy(a.mcpConfig("")); a.say("已复制 MCP 配置") })
 		})
 	})
+}
+
+// connectSection is the agents on this computer, each with its state as
+// a dot and one action: LB Bar's rows, no cards.
+func (a *app) connectSection(c *ui.Context, k ink) {
+	note := "把 KeyBar 加进代理的 MCP 设置（改之前先备份原文件）。之后代理用 run_with_secrets 带着密钥跑命令：按项目 .env.example 里的变量名自动挑密钥，每次你点批准，代理看不到值。"
+	section(c, k, "连接 AI 代理", note, func() {
+		if a.agents == nil {
+			ui.Text(c, "这里没法检测代理。").FontSize(12).TextColor(k.muted)
+			return
+		}
+		ui.Column(c.Key("agents")).Gap(0).Children(func() {
+			for _, st := range a.agentState {
+				a.agentRow(c.Key(st.ID), k, st)
+			}
+		})
+		if n := a.toConnect(); n > 1 {
+			ui.Row(c.Key("all")).Children(func() {
+				smallButton(c.Key("b"), k, fmt.Sprintf("全部连接（%d）", n), "⌘↵", k.link, a.connectAll)
+			})
+		}
+	})
+}
+
+func (a *app) agentRow(c *ui.Context, k ink, st agents.Status) {
+	col, sub := k.line, "未安装"
+	action, on := "", true
+	where := a.shortHome(st.File)
+	if st.Via != "" {
+		where = "通过 claude 命令 · " + where
+	}
+	switch st.State {
+	case agents.Connected:
+		col, sub, action, on = k.green, "已连接 · "+where, "断开", false
+	case agents.Outdated:
+		col, sub, action = k.gold, "指向旧的程序路径，需要更新 · "+where, "更新"
+	case agents.NotConnected:
+		col, sub, action = k.faint, "未连接 · "+where, "连接"
+	}
+	if e := a.agentErr[st.ID]; e != "" {
+		sub = e
+	} else if st.Err != "" {
+		sub = st.Err
+	}
+	row := ui.Row(c).Gap(10).Padding(7, 8).Margin(0, -8).Radius(7).AlignItems(ui.Center)
+	if row.Hovered() {
+		row.Background(k.hover)
+	}
+	row.Children(func() {
+		ui.Box(c).Size(7, 7).Radius(3.5).Background(col).Shrink(0)
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, st.Name).FontSize(13).FontWeight(550)
+			subCol := k.faint
+			if a.agentErr[st.ID] != "" || st.Err != "" {
+				subCol = k.danger
+			}
+			ui.Text(c, sub).FontSize(11).TextColor(subCol).SingleLine().Shrink(1).MinWidth(0)
+		})
+		if action != "" {
+			fg := k.link
+			if !on {
+				fg = k.muted
+			}
+			linkButton(c.Key("act"), k, action, fg, func() { a.connectAgent(st.Agent, on) })
+		}
+	})
+}
+
+// linkButton is a plain-text action, as Raycast's: no border, a hover.
+func linkButton(c *ui.Context, k ink, label string, col ui.Color, fn func()) {
+	b := ui.Box(c).Padding(3, 8).Radius(6).Cursor(ui.CursorPointer).Label(label).OnClick(fn)
+	if b.Hovered() {
+		b.Background(k.hover)
+	}
+	b.Children(func() { ui.Text(c, label).FontSize(12).FontWeight(600).TextColor(col).SingleLine() })
+}
+
+// shortHome writes the home folder as ~.
+func (a *app) shortHome(p string) string {
+	home, err := os.UserHomeDir()
+	if a.agents != nil && a.agents.Home != "" {
+		home, err = a.agents.Home, nil
+	}
+	if err == nil && home != "" && strings.HasPrefix(p, home+string(os.PathSeparator)) {
+		return "~" + p[len(home):]
+	}
+	return p
 }
 
 func (a *app) tabAbout(c *ui.Context, k ink) {
@@ -1149,6 +1251,7 @@ func (a *app) cheatsheet(c *ui.Context, k ink) {
 		{"", "↵", "打开详情：勾选平台、添加平台、删除"},
 		{"", "⌘1 ⌘2 ⌘3", "全部 / 需处理 / 代理禁用"},
 		{"", "⌘N", "添加密钥"},
+		{"", "⌘I", "导入 .env（同名的逐个决定）"},
 		{"", "⌘R", "轮换选中的密钥"},
 		{"", "⌘C", "复制值（30 秒后清除剪贴板）"},
 		{"", "⌘Y", "访问记录"},

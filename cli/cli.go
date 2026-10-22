@@ -19,7 +19,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"keybar/agents"
 	"keybar/approval"
+	"keybar/importer"
 	"keybar/mcp"
 	"keybar/project"
 	"keybar/redact"
@@ -47,6 +49,10 @@ type Env struct {
 	Getwd  func() (string, error)
 	// Exec runs a program for keys run; it returns the exit code.
 	Exec func(cmd *exec.Cmd) (int, error)
+	// Agents is this computer's AI agents, for keys connect.
+	Agents *agents.Env
+
+	in *bufio.Reader
 }
 
 type usageError string
@@ -59,6 +65,7 @@ func Main(e *Env, args []string) int {
 		args = []string{"help"}
 	}
 	cmd, rest := args[0], args[1:]
+	e.in = nil
 	run, ok := commands()[cmd]
 	if !ok {
 		fmt.Fprintf(e.Stderr, "keys：没有命令 %q。keys help 看用法。\n", cmd)
@@ -90,7 +97,7 @@ func commands() map[string]command {
 		},
 		"add": add, "set": set, "get": get, "ls": ls, "list": ls, "show": show, "rm": rm, "edit": edit,
 		"run": runCmd, "import": importCmd, "rotate": rotate, "done": done, "undone": undone, "sync": syncCmd,
-		"audit": audit, "doctor": doctor, "mcp": mcpCmd, "config": config,
+		"audit": audit, "doctor": doctor, "mcp": mcpCmd, "config": config, "connect": connect, "disconnect": disconnect,
 		"export": func(e *Env, _ []string) (int, error) {
 			return 2, errors.New("没有 export：KeyBar 不把密钥批量写成明文文件。用 keys run -- <命令> 注入到程序，或 keys get NAME --reveal 读一个")
 		},
@@ -98,6 +105,12 @@ func commands() map[string]command {
 }
 
 const usage = `keys — KeyBar 的命令行：密钥只存在系统钥匙串里，程序和 AI 代理按需取用。
+
+三步上手：
+  keys import .env            把 .env 里的密钥收进钥匙串（同名冲突逐个问你）
+  keys run -- npm run dev     自动注入项目需要的密钥：看 .env.example / .env 里的变量名，
+                              KeyBar 里有同名的就注入，不用写配置
+  keys connect                把 KeyBar 接到 Claude Code、Cursor、Codex（MCP），代理用密钥时你点批准
 
 用法：
   keys add NAME [选项]        添加密钥（值从标准输入或隐藏提示读，绝不从参数读）
@@ -107,10 +120,12 @@ const usage = `keys — KeyBar 的命令行：密钥只存在系统钥匙串里�
   keys show NAME              详情：平台清单、轮换历史
   keys edit NAME [选项]       改元数据
   keys rm NAME [-y]           删除
-  keys run [-p keys.toml] [-e VAR=KEY]... [--redact] -- 命令 参数...
-                              只把需要的密钥注入子进程的环境变量
-  keys import .env [--prefix P] [--project 名] [--shred]
-                              导入 .env，生成 keys.toml，可选覆盖并删除 .env
+  keys run [-e VAR[=KEY]]... [--redact] -- 命令 参数...
+                              只把需要的密钥注入子进程的环境变量；-e 指定时只注入这些
+  keys import .env [--on-conflict ask|skip|overwrite|rename] [--project 名] [--prefix P] [--shred]
+                              导入 .env；同名但值不同时：保留现有 / 覆盖（记为轮换）/ 改名导入
+  keys connect [代理...] [--status]   连接 AI 代理（claude-code、cursor、codex；默认全部已安装的）
+  keys disconnect [代理...]   断开
   keys rotate NAME [--no-sync] [--note 说明]
                               换新值，自动更新 GitHub Actions / Vercel，列出其余要手动更新的平台
   keys done NAME ID|all       勾掉清单上已更新的平台（undone 撤销）
@@ -118,7 +133,7 @@ const usage = `keys — KeyBar 的命令行：密钥只存在系统钥匙串里�
   keys audit [-n 50] [--key NAME]  访问记录
   keys doctor [目录...]        检查超期 / 快到期的密钥、未完成的清单、明文 .env
   keys config [名 值]          设置：rotate-days、remind、remind-days、grant-minutes、cli-approval
-  keys mcp [--client 名]      MCP 服务（stdio），给 Claude Code、Cursor 等代理用
+  keys mcp [--client 名]      MCP 服务（stdio），keys connect 会替你配好
 
 add / edit 的选项：
   --desc 说明   --tag 标签   --project 项目   --rotate-days N（-1 不提醒）
@@ -127,6 +142,7 @@ add / edit 的选项：
       如 github:owner/repo、vercel:my-app?env=production、railway:api、env:~/proj/.env
   edit 另有：--untag、--unproject、--rm-platform ID
 
+变量名和密钥名不同时（比如改名导入的），写在项目的 keys.toml 里：[env] DATABASE_URL = "TIDB_PROD_URL"。
 没有 export：KeyBar 不把密钥批量写成明文文件。
 `
 
@@ -201,6 +217,20 @@ func (e *Env) readValue(name string, confirm bool) ([]byte, error) {
 	return b, nil
 }
 
+// line reads a line the user types; ok is false at the input's end.
+func (e *Env) line(prompt string) (s string, ok bool) {
+	fmt.Fprint(e.Stderr, prompt)
+	if e.in == nil {
+		e.in = bufio.NewReader(e.Stdin)
+	}
+	line, err := e.in.ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(e.Stderr)
+		return "", false
+	}
+	return strings.TrimSpace(line), true
+}
+
 // ask asks a yes/no question on a terminal; without one, the answer is def.
 func (e *Env) ask(q string, def bool) bool {
 	if !e.terminal() {
@@ -210,9 +240,8 @@ func (e *Env) ask(q string, def bool) bool {
 	if def {
 		hint = " [Y/n] "
 	}
-	fmt.Fprint(e.Stderr, q+hint)
-	line, _ := bufio.NewReader(e.Stdin).ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
+	ans, _ := e.line(q + hint)
+	switch strings.ToLower(ans) {
 	case "y", "yes", "是":
 		return true
 	case "n", "no", "否":
@@ -671,76 +700,89 @@ func runCmd(e *Env, args []string) (int, error) {
 	}
 	i := slices.Index(pos, "--")
 	if i < 0 || i != 0 || len(pos) < 2 {
-		return 2, usageError("用法：keys run [-p keys.toml] [-e VAR=KEY]... [--redact] -- 命令 参数...")
+		return 2, usageError("用法：keys run [-e VAR[=KEY]]... [--redact] -- 命令 参数...")
 	}
 	argv := pos[1:]
-	env := map[string]string{}
-	for _, kv := range envs {
-		v, k, ok := strings.Cut(kv, "=")
-		if !ok {
-			v, k = kv, kv
-		}
-		env[v] = k
-	}
-	if *proj != "" || len(env) == 0 {
-		path := *proj
-		if path == "" {
-			wd, _ := e.Getwd()
-			p, ok := project.Find(wd)
-			if !ok {
-				return 2, usageError("没找到 keys.toml：用 -p 指定，或 -e VAR=KEY 列出要注入的密钥")
-			}
-			path = p
-		}
-		f, err := project.Load(path)
-		if err != nil {
-			return 1, err
-		}
-		for v, k := range f.Env {
-			if _, ok := env[v]; !ok {
-				env[v] = k
-			}
-		}
-	}
-	var names []string
-	for _, k := range env {
-		if !slices.Contains(names, k) {
-			names = append(names, k)
-		}
-	}
-	slices.Sort(names)
 	inv, err := e.Vault.Inventory()
 	if err != nil {
 		return 1, err
 	}
+	has := func(n string) bool { _, ok := inv.Find(n); return ok }
+	wd, _ := e.Getwd()
+	env := map[string]string{}
+	var skipped []string
+	switch {
+	case len(envs) > 0 || *proj != "":
+		// Named: exactly these.
+		for _, kv := range envs {
+			v, k, ok := strings.Cut(kv, "=")
+			if !ok {
+				v, k = kv, kv
+			}
+			env[v] = k
+		}
+		if *proj != "" {
+			f, err := project.Load(*proj)
+			if err != nil {
+				return 1, err
+			}
+			for v, k := range f.Env {
+				if _, ok := env[v]; !ok {
+					env[v] = k
+				}
+			}
+		}
+	default:
+		// Found: the project's variable names that KeyBar has a key for.
+		r, err := project.Resolve(wd, has)
+		if err != nil {
+			return 1, err
+		}
+		if len(r.TomlMissing) > 0 {
+			return 1, fmt.Errorf("%s 里写的 %s，KeyBar 里没有（keys add 添加，或改 keys.toml）", shortPath(r.Toml), strings.Join(r.TomlMissing, ", "))
+		}
+		env, skipped = r.Env, r.Missing
+	}
+	names := keysOf(env)
 	var missing []string
 	for _, n := range names {
-		if _, ok := inv.Find(n); !ok {
+		if !has(n) {
 			missing = append(missing, n)
 		}
 	}
 	if len(missing) > 0 {
 		return 1, fmt.Errorf("KeyBar 里没有：%s（keys add 添加）", strings.Join(missing, ", "))
 	}
+	switch {
+	case len(names) == 0 && len(skipped) == 0:
+		fmt.Fprintln(e.Stderr, "keys：没找到要注入的密钥（这里到仓库根没有 .env.example / .env），直接运行。用 -e NAME 指定。")
+	case len(names) == 0:
+		fmt.Fprintf(e.Stderr, "keys：项目要的 %s，KeyBar 里都没有，直接运行。\n", short(skipped))
+	case len(skipped) > 0:
+		fmt.Fprintf(e.Stderr, "keys：注入 %s；KeyBar 里没有 %s，跳过\n", strings.Join(names, "、"), short(skipped))
+	default:
+		fmt.Fprintf(e.Stderr, "keys：注入 %s\n", strings.Join(names, "、"))
+	}
 	line := runner.Display(argv)
-	asked, err := e.approveCLI("run", names, line, !*redactOut)
-	if err != nil {
-		return 1, err
-	}
-	values, err := e.Vault.Values(names)
-	if err != nil {
-		return 1, err
-	}
+	var values map[string][]byte
 	inject := map[string][]byte{}
-	for v, k := range env {
-		inject[v] = values[k]
-	}
-	if !asked {
-		_ = e.Vault.Log(vault.Event{Client: "cli", Action: "run", Keys: names, Decision: "ok", Detail: filepath.Base(argv[0])})
+	if len(names) > 0 {
+		asked, err := e.approveCLI("run", names, line, !*redactOut)
+		if err != nil {
+			return 1, err
+		}
+		if values, err = e.Vault.Values(names); err != nil {
+			return 1, err
+		}
+		for v, k := range env {
+			inject[v] = values[k]
+		}
+		if !asked {
+			_ = e.Vault.Log(vault.Event{Client: "cli", Action: "run", Keys: names, Decision: "ok", Detail: filepath.Base(argv[0])})
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	wd, _ := e.Getwd()
 	cmd, err := runner.Command(ctx, argv, inject, wd)
 	if err != nil {
 		return 2, err
@@ -748,7 +790,7 @@ func runCmd(e *Env, args []string) (int, error) {
 	cmd.Stdin = e.Stdin
 	cmd.Stdout, cmd.Stderr = e.Stdout, e.Stderr
 	var closers []io.Closer
-	if *redactOut {
+	if *redactOut && len(values) > 0 {
 		r := redact.New(values) // labeled by key name
 		o, er := r.Writer(e.Stdout), r.Writer(e.Stderr)
 		cmd.Stdout, cmd.Stderr = o, er
@@ -759,6 +801,26 @@ func runCmd(e *Env, args []string) (int, error) {
 		_ = c.Close()
 	}
 	return code, err
+}
+
+// keysOf are a mapping's keys, sorted, once each.
+func keysOf(env map[string]string) []string {
+	var names []string
+	for _, k := range env {
+		if !slices.Contains(names, k) {
+			names = append(names, k)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// short lists a few names.
+func short(ns []string) string {
+	if len(ns) > 4 {
+		return strings.Join(ns[:4], "、") + fmt.Sprintf(" 等 %d 个", len(ns))
+	}
+	return strings.Join(ns, "、")
 }
 
 // ExecCmd runs cmd and returns its exit code.
@@ -780,109 +842,138 @@ func importCmd(e *Env, args []string) (int, error) {
 	proj := fs.String("project", "", "")
 	shred := fs.Bool("shred", false, "")
 	keep := fs.Bool("keep", false, "")
-	noToml := fs.Bool("no-toml", false, "")
+	onConflict := fs.String("on-conflict", "", "")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return 2, err
 	}
 	if len(pos) != 1 {
-		return 2, usageError("用法：keys import .env [--prefix P] [--project 名] [--shred | --keep] [--no-toml]")
+		return 2, usageError("用法：keys import .env [--on-conflict ask|skip|overwrite|rename] [--project 名] [--prefix P] [--shred | --keep]")
 	}
-	path, _ := filepath.Abs(pos[0])
-	b, err := os.ReadFile(path)
+	ask := e.terminal()
+	choice := importer.Keep
+	switch *onConflict {
+	case "", "ask":
+		if *onConflict == "ask" && !ask {
+			return 2, usageError("没有终端，没法逐个问：用 --on-conflict skip|overwrite|rename")
+		}
+	default:
+		c, err := importer.ParseChoice(*onConflict)
+		if err != nil {
+			return 2, usageError(err.Error())
+		}
+		choice, ask = c, false
+	}
+	plan, err := importer.Read(e.Vault, pos[0], *proj, *prefix)
 	if err != nil {
 		return 1, err
 	}
-	vars, err := project.ParseDotenv(b)
-	if err != nil {
-		return 1, fmt.Errorf("%s：%w", path, err)
+	path := shortPath(plan.Path)
+	for _, it := range plan.Repeated() {
+		lines := make([]string, len(it.Lines))
+		for i, l := range it.Lines {
+			lines[i] = strconv.Itoa(l)
+		}
+		fmt.Fprintf(e.Stderr, "注意：%s 在文件里出现了 %d 次（第 %s 行），用最后一次（第 %d 行）的值。\n", it.Var, len(it.Lines), strings.Join(lines, "、"), it.Line)
 	}
-	if len(vars) == 0 {
-		return 1, errors.New("文件里没有变量")
+	conflicts := plan.Conflicts()
+	if len(conflicts) > 0 && ask {
+		fmt.Fprintf(e.Stderr, "有 %d 个名字 KeyBar 里已有、但值不同（不显示值）：\n", len(conflicts))
 	}
-	dir := filepath.Dir(path)
-	name := *proj
-	if name == "" {
-		name = filepath.Base(dir)
+	for _, it := range conflicts {
+		if !ask {
+			it.Choice = choice
+			continue
+		}
+		e.decide(plan, it)
 	}
-	inv, err := e.Vault.Inventory()
-	if err != nil {
+	res := plan.Apply(e.Vault)
+	for _, it := range plan.Items {
+		switch {
+		case it.State == importer.New && res.Env[it.Var] != "":
+			fmt.Fprintf(e.Stdout, "  + %s\n", it.Key)
+		case it.State == importer.Conflict && it.Choice == importer.Overwrite && res.Env[it.Var] != "":
+			fmt.Fprintf(e.Stdout, "  ↻ %s（覆盖，旧值记为一次轮换）\n", it.Key)
+		case it.State == importer.Conflict && it.Choice == importer.Rename && res.Env[it.Var] != "":
+			fmt.Fprintf(e.Stdout, "  + %s（%s 改名导入）\n", res.Env[it.Var], it.Var)
+		case it.State == importer.Conflict && it.Choice == importer.Keep:
+			fmt.Fprintf(e.Stdout, "  · %s：保留 KeyBar 里的值，文件里的没导入\n", it.Key)
+		case it.State == importer.Empty:
+			fmt.Fprintf(e.Stderr, "  跳过 %s：值是空的\n", it.Var)
+		}
+	}
+	for _, f := range res.Failed {
+		fmt.Fprintf(e.Stderr, "  ✗ %s\n", f)
+	}
+	_ = e.Vault.Log(vault.Event{Client: "cli", Action: "import", Keys: keysOf(res.Env), Decision: "ok", Detail: path})
+	fmt.Fprintf(e.Stdout, "%s。\n", res.Summary())
+	if !ask && res.Kept > 0 && *onConflict == "" {
+		fmt.Fprintf(e.Stdout, "同名但值不同的 %d 个没导入：要覆盖或改名，加 --on-conflict overwrite 或 rename。\n", res.Kept)
+	}
+	for _, n := range res.Pending {
+		fmt.Fprintf(e.Stdout, "%s 换了值，其它平台上还是旧值：keys show %s 看清单。\n", n, n)
+	}
+	if p, err := plan.WriteMapping(res); err != nil {
 		return 1, err
+	} else if p != "" {
+		fmt.Fprintf(e.Stdout, "改了名的变量记在 %s（只有名字，可以提交），keys run 会按它注入。\n", shortPath(p))
 	}
-	env := map[string]string{}
-	added, skipped := 0, 0
-	for _, v := range vars {
-		key := *prefix + v.Name
-		if strings.TrimSpace(v.Value) == "" {
-			fmt.Fprintf(e.Stderr, "  跳过 %s：值是空的\n", v.Name)
-			skipped++
-			continue
-		}
-		if _, ok := inv.Find(key); ok {
-			old, err := e.Vault.Value(key)
-			if err == nil && bytes.Equal(old, []byte(v.Value)) {
-				fmt.Fprintf(e.Stderr, "  %s 已在 KeyBar 里（值相同），只记下项目\n", key)
-				_ = e.Vault.Edit(key, func(k *vault.Key) error { k.Projects = vault.Clean(append(k.Projects, name)); return nil })
-				env[v.Name] = key
-				continue
-			}
-			fmt.Fprintf(e.Stderr, "  跳过 %s：KeyBar 里已有同名密钥但值不同（用 --prefix 换个名字导入）\n", key)
-			skipped++
-			continue
-		}
-		k := vault.Key{Name: key, Projects: []string{name}, Description: "从 " + shortPath(path) + " 导入"}
-		if err := e.Vault.Add(k, []byte(v.Value)); err != nil {
-			fmt.Fprintf(e.Stderr, "  %s：%v\n", key, err)
-			skipped++
-			continue
-		}
-		env[v.Name] = key
-		added++
-		fmt.Fprintf(e.Stdout, "  + %s\n", key)
+	if res.Imported() > 0 {
+		fmt.Fprintln(e.Stdout, "之后在项目里：keys run -- <命令>")
 	}
-	_ = e.Vault.Log(vault.Event{Client: "cli", Action: "import", Keys: slices.Sorted(mapValues(env)), Decision: "ok", Detail: shortPath(path)})
-	fmt.Fprintf(e.Stdout, "导入 %d 个，跳过 %d 个。\n", added, skipped)
-	if len(env) > 0 && !*noToml {
-		tomlPath := filepath.Join(dir, project.FileName)
-		if old, err := project.Load(tomlPath); err == nil {
-			for k, v := range old.Env {
-				if _, ok := env[k]; !ok {
-					env[k] = v
-				}
-			}
+	if !res.Complete() {
+		if *shred {
+			fmt.Fprintf(e.Stderr, "有值没导入，保留 %s。\n", path)
 		}
-		if err := project.Write(tomlPath, name, env); err != nil {
-			return 1, err
-		}
-		fmt.Fprintf(e.Stdout, "已写 %s（只有名字，没有值，可以提交）。之后用：keys run -- <命令>\n", shortPath(tomlPath))
-	}
-	if skipped > 0 && (*shred || !*keep) {
-		fmt.Fprintf(e.Stderr, "有 %d 个没导入，保留 %s。\n", skipped, shortPath(path))
 		return 0, nil
 	}
 	switch {
 	case *keep:
-	case *shred || e.ask("覆盖并删除 "+shortPath(path)+"？（值已在钥匙串里）", false):
-		if err := project.Shred(path); err != nil {
-			return 1, fmt.Errorf("删除 %s：%w", path, err)
+	case *shred || e.ask("覆盖并删除 "+path+"？（值已在钥匙串里）", false):
+		if err := project.Shred(plan.Path); err != nil {
+			return 1, fmt.Errorf("删除 %s：%w", plan.Path, err)
 		}
-		fmt.Fprintf(e.Stdout, "已覆盖并删除 %s。如果它曾提交到 git 或被备份过，请轮换这些密钥。\n", shortPath(path))
+		fmt.Fprintf(e.Stdout, "已覆盖并删除 %s。如果它曾提交到 git 或被备份过，请轮换这些密钥。\n", path)
 	default:
-		fmt.Fprintf(e.Stdout, "保留了 %s：确认程序能用 keys run 跑起来后，记得删除它（keys import 时加 --shred）。\n", shortPath(path))
+		fmt.Fprintf(e.Stdout, "保留了 %s：确认程序能用 keys run 跑起来后，记得删除它（keys import 时加 --shred）。\n", path)
 	}
 	return 0, nil
 }
 
-func mapValues(m map[string]string) func(func(string) bool) {
-	return func(yield func(string) bool) {
-		seen := map[string]bool{}
-		for _, v := range m {
-			if !seen[v] {
-				seen[v] = true
-				if !yield(v) {
+// decide asks what to do with a name KeyBar has with another value.
+func (e *Env) decide(plan *importer.Plan, it *importer.Item) {
+	fmt.Fprintf(e.Stderr, "\n%s：KeyBar 里已有同名密钥，值不同。\n", it.Key)
+	fmt.Fprintf(e.Stderr, "  k  保留现有（不导入文件里的）\n  o  覆盖（旧值记为一次轮换）\n  r  改名导入为 %s\n", it.NewName)
+	for {
+		ans, ok := e.line("选择 [k/o/r]（默认 k）：")
+		switch strings.ToLower(ans) {
+		case "", "k", "keep", "skip":
+			it.Choice = importer.Keep
+			return
+		case "o", "overwrite":
+			it.Choice = importer.Overwrite
+			return
+		case "r", "rename":
+			for {
+				name, ok := e.line("新名字（回车用 " + it.NewName + "）：")
+				if !ok {
+					it.Choice = importer.Keep
 					return
 				}
+				if name == "" {
+					name = it.NewName
+				}
+				if err := plan.CheckName(e.Vault, it, name); err != nil {
+					fmt.Fprintf(e.Stderr, "  %v\n", err)
+					continue
+				}
+				it.Choice, it.NewName = importer.Rename, name
+				return
 			}
+		}
+		if !ok {
+			it.Choice = importer.Keep
+			return
 		}
 	}
 }
@@ -1120,19 +1211,30 @@ func doctor(e *Env, args []string) (int, error) {
 		envs = append(envs, project.FindDotenvs(d, 5)...)
 	}
 	report("没找到明文 .env 文件（"+strings.Join(shortPaths(dirs), "、")+"）", "明文 .env 文件（keys import <文件> --shred 导入后删除）", shortPaths(envs))
-	if p, ok := project.Find(dirs[0]); ok {
-		f, err := project.Load(p)
-		if err != nil {
-			fmt.Fprintf(w, "✗ %v\n", err)
-			problems++
-		} else {
-			var missing []string
-			for _, k := range f.Keys() {
-				if _, ok := inv.Find(k); !ok {
-					missing = append(missing, k)
-				}
+	has := func(n string) bool { _, ok := inv.Find(n); return ok }
+	if r, err := project.Resolve(dirs[0], has); err != nil {
+		fmt.Fprintf(w, "✗ %v\n", err)
+		problems++
+	} else {
+		if r.Toml != "" {
+			report(shortPath(r.Toml)+" 写的密钥都在", shortPath(r.Toml)+" 写了、但 KeyBar 里没有", r.TomlMissing)
+		}
+		if n := len(r.Keys()); n > 0 {
+			fmt.Fprintf(w, "  keys run 会注入：%s\n", strings.Join(r.Keys(), "、"))
+		}
+		if len(r.Missing) > 0 {
+			fmt.Fprintf(w, "  项目里的 %s，KeyBar 里没有（keys run 时跳过；是密钥就 keys add）\n", short(r.Missing))
+		}
+	}
+	if e.Agents != nil {
+		var parts []string
+		for _, s := range e.Agents.Status() {
+			if s.State != agents.NotInstalled {
+				parts = append(parts, s.Name+" "+s.State.Zh())
 			}
-			report(shortPath(p)+" 用到的密钥都在", shortPath(p)+" 用到但 KeyBar 里没有", missing)
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(w, "  AI 代理：%s（keys connect 连接）\n", strings.Join(parts, "，"))
 		}
 	}
 	if problems == 0 {

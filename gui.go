@@ -31,6 +31,7 @@ type shell struct {
 	ipc      *approval.Server
 	shortcut string
 	quitting bool
+	picking  bool // a file dialog is open: the panel stays
 
 	title, tip, menuSig string
 
@@ -69,6 +70,10 @@ func (s *shell) ready() {
 	if exe, err := os.Executable(); err == nil {
 		a.exe = exe
 	}
+	a.agents = agentEnv()
+	if demo {
+		a.agents = demoAgents(a.agents.Exe)
+	}
 	if a.settings.Shortcut == "" {
 		a.settings.Shortcut = defaultShortcut
 	}
@@ -86,7 +91,7 @@ func (s *shell) ready() {
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { s.quitting = true })
 	s.panel.OnBlur(func() {
-		if len(a.pending) == 0 { // a request stays until answered
+		if len(a.pending) == 0 && !s.picking { // a request stays until answered
 			s.panel.Hide()
 		}
 	})
@@ -114,6 +119,22 @@ func (s *shell) ready() {
 	a.installCLI = func() (string, error) { return installCLI(a.exe) }
 	a.openURL = func(u string) { _ = mygo.Shell.OpenExternal(u) }
 	a.trayChanged = s.trayChanged
+	a.pickFile = func(done func(string)) {
+		s.picking = true
+		go func() {
+			paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: "选择要导入的 .env 文件", ButtonLabel: "读取", ShowHiddenFiles: true})
+			s.panel.Update(func() {
+				s.picking = false
+				if err != nil {
+					log.Print("open dialog: ", err)
+				}
+				if len(paths) > 0 {
+					done(paths[0])
+				}
+				s.show()
+			})
+		}()
+	}
 	a.winDrag = s.drag
 	mygo.App.OnNotificationClick(func(string) { s.panel.Update(s.show) })
 
@@ -281,6 +302,8 @@ func (s *shell) trayChanged() {
 	items = append(items, mygo.Separator(),
 		&mygo.MenuItem{Label: "打开 KeyBar", Accelerator: s.shortcut, Click: func(*mygo.MenuItem, *mygo.Window) { a.page = pageList; s.show() }},
 		&mygo.MenuItem{Label: "添加密钥…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openAdd(); s.show() }},
+		&mygo.MenuItem{Label: "导入 .env…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openImport(); s.show() }},
+		&mygo.MenuItem{Label: "连接 AI 代理…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openTab(tabAgents); s.show() }},
 		&mygo.MenuItem{Label: "访问记录", Click: func(*mygo.MenuItem, *mygo.Window) { a.openLog(); s.show() }},
 		&mygo.MenuItem{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings(); s.show() }},
 		mygo.Separator(),

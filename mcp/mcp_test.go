@@ -248,3 +248,48 @@ func noValues(t *testing.T, dir string) {
 	}
 	_ = fmt.Sprint
 }
+
+func TestRunDetectsProjectKeys(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh")
+	}
+	s, g := setup(t)
+	g.allow = true
+	repo := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	sub := filepath.Join(repo, "web")
+	_ = os.MkdirAll(sub, 0o755)
+	// Names only: the example's placeholder values are not used.
+	_ = os.WriteFile(filepath.Join(repo, ".env.example"), []byte("OPENAI_API_KEY=sk-placeholder\nVERCEL_TOKEN=\nPORT=3000\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(sub, ".env"), []byte("TIDB_URL=placeholder-not-used\n"), 0o600)
+	got := call(t, s, tool(1, "run_with_secrets", map[string]any{
+		"command": `echo "a=$OPENAI_API_KEY b=$TIDB_URL v=${VERCEL_TOKEN:-none}"`, "cwd": sub}))
+	out := result(t, got[1]).Content[0].Text
+	if !strings.Contains(out, "a=[REDACTED:OPENAI_API_KEY] b=[REDACTED:TIDB_URL] v=none") {
+		t.Errorf("%s", out)
+	}
+	if !strings.Contains(out, "injected: OPENAI_API_KEY, TIDB_URL") || !strings.Contains(out, "skipped: PORT") || !strings.Contains(out, "does not let agents use them): VERCEL_TOKEN") {
+		t.Errorf("notes: %s", out)
+	}
+	if len(g.asked) != 1 || strings.Join(g.asked[0].Keys, ",") != "OPENAI_API_KEY,TIDB_URL" {
+		t.Errorf("asked %+v", g.asked)
+	}
+	// Nothing to inject: an error that says what to do, no approval asked.
+	empty := t.TempDir()
+	got = call(t, s, tool(2, "run_with_secrets", map[string]any{"command": "true", "cwd": empty}))
+	if tr := result(t, got[2]); !tr.IsError || !strings.Contains(tr.Content[0].Text, "list_keys") || len(g.asked) != 1 {
+		t.Errorf("%+v", tr)
+	}
+}
+
+func TestToolsPreferRun(t *testing.T) {
+	ts := tools()
+	if ts[0]["name"] != "run_with_secrets" {
+		t.Error("run_with_secrets is not first")
+	}
+	for _, x := range ts {
+		if x["name"] == "request_secret" && !strings.HasPrefix(x["description"].(string), "Discouraged") {
+			t.Error("request_secret does not discourage itself")
+		}
+	}
+}

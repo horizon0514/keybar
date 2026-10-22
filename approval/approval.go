@@ -74,6 +74,8 @@ func ClientName(c string) string {
 		return "Claude Code"
 	case "cursor", "cursor-vscode":
 		return "Cursor"
+	case "codex", "codex-mcp-client":
+		return "Codex"
 	case "cli":
 		return "命令行"
 	case "app":

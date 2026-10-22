@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 
+	"keybar/agents"
 	"keybar/approval"
 	"keybar/cli"
 	"keybar/remote"
@@ -23,11 +24,11 @@ import (
 	"github.com/egoist/mygo"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 // cliCommands are the arguments that make the app its command line.
 var cliCommands = []string{"help", "-h", "--help", "version", "add", "set", "get", "ls", "list", "show", "rm", "edit", "run",
-	"import", "rotate", "done", "undone", "sync", "audit", "doctor", "mcp", "config", "export"}
+	"import", "rotate", "done", "undone", "sync", "audit", "doctor", "mcp", "config", "export", "connect", "disconnect"}
 
 // isCLI tells whether the program runs as the command line: named keys
 // (a link to it, or keys.exe), or given a command.
@@ -85,6 +86,17 @@ func newVault(by string) *vault.Vault {
 	return &vault.Vault{Dir: dir, Secrets: systemSecrets{}, By: by}
 }
 
+// agentEnv is this computer's agents, to run this program as KeyBar's MCP
+// server.
+func agentEnv() *agents.Env {
+	home, _ := os.UserHomeDir()
+	exe, _ := os.Executable()
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = r
+	}
+	return &agents.Env{Home: home, Exe: exe, CodexHome: os.Getenv("CODEX_HOME")}
+}
+
 func cliMain(args []string) int {
 	v := newVault("cli")
 	s := vault.LoadSettings(v.Dir)
@@ -93,6 +105,7 @@ func cliMain(args []string) int {
 		Terminal: cli.Terminal, Password: cli.Password, Getwd: os.Getwd, Exec: cli.ExecCmd,
 		Gate:   &approval.Gate{Dir: v.Dir, Dialog: approval.Dialog{Minutes: s.GrantMinutes}},
 		Syncer: &remote.Syncer{Token: v.Value},
+		Agents: agentEnv(),
 	}
 	return cli.Main(env, args)
 }

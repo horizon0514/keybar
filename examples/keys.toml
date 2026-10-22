@@ -1,7 +1,6 @@
-# keys.toml：环境变量名 = KeyBar 里的密钥名。没有值，可以提交到仓库。
+# keys.toml（可选）：只在变量名和 KeyBar 里的密钥名不同时需要。没有值，可以提交到仓库。
 # keys run -- npm run dev 会在当前目录或上级目录找到它。
 project = "my-app"
 
 [env]
-OPENAI_API_KEY = "OPENAI_API_KEY"
 DATABASE_URL = "TIDB_PROD_URL"

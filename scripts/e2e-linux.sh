@@ -2,8 +2,10 @@
 # e2e-linux.sh BINARY [SHOTDIR]: drives the built binary end to end on
 # Linux against a real Secret Service (a throwaway gnome-keyring in a
 # temporary HOME, in its own D-Bus session and virtual display):
-# add / ls / get / run / rotate / done / rm on the command line, and an
-# MCP agent's request approved in the running app with the keyboard.
+# add / ls / get / run / rotate / done / rm on the command line, import
+# with name conflicts, keys run finding a project's keys, connecting
+# agents, and an MCP agent's request approved in the running app with the
+# keyboard.
 # Only dummy values; the environment is cleared, so nothing from the
 # caller's environment reaches the app, the CLI or the commands they run.
 # Needs xvfb, dbus, gnome-keyring, openbox, xdotool, imagemagick.
@@ -31,6 +33,8 @@ hasnt(){ grep -qF -- "$2" <<<"$1" && { bad "$3"; echo "$1" | sed 's/^/      /'; 
 
 V1=dummy-e2e-value-0001
 V2=dummy-e2e-value-0002
+V3=dummy-e2e-value-0003
+V4=dummy-e2e-value-0004
 
 echo "命令行（真实 Secret Service）"
 printf '%s' "$V1" | keys add E2E_TOKEN --desc "e2e 测试" --platform railway:api --platform env:~/proj/.env --tag e2e >/dev/null
@@ -75,6 +79,41 @@ out=$(timeout 30 keys run -e T=E2E_TOKEN --redact -- sh -c 'echo run:$T' </dev/n
 has "$out" "run:[REDACTED:E2E_TOKEN]" "在应用里按 Enter → 允许一次，输出脱敏"
 out=$(keys audit -n 10); has "$out" "e2e-agent" "访问记录有 MCP 客户端名"; hasnt "$out" "$V1" "访问记录里没有值"
 
+echo "导入（同名冲突）与自动注入"
+proj="$HOME/code/e2e-app"; mkdir -p "$proj/.git" "$proj/src"
+printf 'E2E_TOKEN=your-token-here\nE2E_NEW=\nPORT=3000\n' >"$proj/.env.example"
+printf 'E2E_TOKEN=%s\nE2E_NEW=dummy-e2e-first-0000\nE2E_NEW=%s\n' "$V3" "$V4" >"$proj/.env"
+out=$(cd "$proj" && keys import .env </dev/null 2>&1)
+has "$out" "新增 1 个，保留现有 1 个" "导入：同名不同值，非交互默认保留"
+has "$out" "出现了 2 次" "导入：同一文件里重复的变量有提示"
+hasnt "$out" "$V3" "导入输出里没有值"; hasnt "$out" "$V4" "导入输出里没有值（2）"
+out=$(cd "$proj" && keys import .env --on-conflict rename </dev/null 2>&1)
+has "$out" "E2E_TOKEN_E2E_APP（E2E_TOKEN 改名导入）" "导入：改名为 NAME_PROJECT"
+has "$out" "已有相同值 1 个" "导入：值相同的跳过"
+grep -qF 'E2E_TOKEN = "E2E_TOKEN_E2E_APP"' "$proj/keys.toml" && ok "改名记在 keys.toml" || bad "keys.toml 没有映射"
+approve Return auto-run &
+out=$(cd "$proj/src" && timeout 30 keys run --redact -- sh -c 'echo t:$E2E_TOKEN n:$E2E_NEW p:${PORT:-unset}' </dev/null 2>&1 || true); wait $! || true
+has "$out" "t:[REDACTED:E2E_TOKEN_E2E_APP] n:[REDACTED:E2E_NEW] p:unset" "keys run 自动注入（不写配置；改名的按 keys.toml）"
+has "$out" "KeyBar 里没有 PORT，跳过" "keys run：缺的变量跳过并提示"
+
+echo "连接 AI 代理"
+mkdir -p "$HOME/.cursor" "$HOME/.codex"
+printf '{\n  "mcpServers": {\n    "other": {\n      "command": "other-server"\n    }\n  }\n}\n' >"$HOME/.cursor/mcp.json"
+printf '# codex\nmodel = "o3"\n' >"$HOME/.codex/config.toml"
+out=$(keys connect </dev/null 2>&1 || true)
+has "$out" "● Cursor" "connect：Cursor 已连接"; has "$out" "● Codex" "connect：Codex 已连接"; has "$out" "Claude Code  未安装" "connect：没装的跳过"
+grep -qF "\"$bin\"" "$HOME/.cursor/mcp.json" && grep -qF '"other-server"' "$HOME/.cursor/mcp.json" && ok "Cursor 配置合并，原有的保留" || { bad "Cursor 配置"; cat "$HOME/.cursor/mcp.json"; }
+[ -f "$HOME/.cursor/mcp.json.keybar-backup" ] && ok "原文件已备份" || bad "没有备份"
+grep -qF 'args = ["mcp", "--client", "codex"]' "$HOME/.codex/config.toml" && grep -qF 'model = "o3"' "$HOME/.codex/config.toml" && ok "Codex 配置合并" || { bad "Codex 配置"; cat "$HOME/.codex/config.toml"; }
+before=$(sha256sum "$HOME/.cursor/mcp.json"); keys connect >/dev/null 2>&1 || true
+[ "$before" = "$(sha256sum "$HOME/.cursor/mcp.json")" ] && ok "再次 connect 不改文件" || bad "再次 connect 改了文件"
+cfg='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+cmd=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["mcpServers"]["keybar"]["command"])' "$HOME/.cursor/mcp.json" 2>/dev/null || echo "$bin")
+out=$( { printf '%s\n' "$cfg"; sleep 1; } | timeout 10 "$cmd" mcp --client cursor || true)
+has "$out" '"run_with_secrets"' "按写入的配置启动 MCP 服务"
+out=$(keys disconnect cursor 2>&1); grep -qF keybar "$HOME/.cursor/mcp.json" && bad "disconnect 没删掉" || ok "disconnect"
+
 echo "轮换"
 out=$(printf '%s' "$V2" | keys rotate E2E_TOKEN --no-sync 2>&1); has "$out" "Railway · api" "rotate 列出要手动更新的平台"
 keys done E2E_TOKEN all >/dev/null
@@ -85,10 +124,11 @@ out=$(timeout 30 keys run -e T=E2E_TOKEN -- sh -c "test \"\$(printf %s \"\$T\" |
 has "$out" "new-value-ok" "钥匙串里是新值"
 grep -rlF -- "$V1" "$KEYBAR_DIR" && bad "数据目录里出现了旧值" || ok "数据目录里没有旧值"
 grep -rlF -- "$V2" "$KEYBAR_DIR" && bad "数据目录里出现了新值" || ok "数据目录里没有新值"
+grep -rlF -e "$V3" -e "$V4" "$KEYBAR_DIR" && bad "数据目录里出现了导入的值" || ok "数据目录里没有导入的值"
 
 echo "删除"
-keys rm E2E_TOKEN -y >/dev/null
-out=$(keys ls); hasnt "$out" E2E_TOKEN "rm 后不在清单里"
+keys rm E2E_TOKEN -y >/dev/null; keys rm E2E_TOKEN_E2E_APP -y >/dev/null; keys rm E2E_NEW -y >/dev/null
+out=$(keys ls); hasnt "$out" E2E_ "rm 后不在清单里"
 kill "$app" 2>/dev/null || true
 echo "通过 $pass，失败 $fail"
 [ "$fail" = 0 ]

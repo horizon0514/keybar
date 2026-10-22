@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"keybar/agents"
 	"keybar/approval"
+	"keybar/importer"
+	"keybar/project"
 	"keybar/remote"
 	"keybar/vault"
 
@@ -23,6 +28,7 @@ const (
 	pageForm
 	pageLog
 	pageSettings
+	pageImport
 )
 
 // Settings' tabs.
@@ -48,6 +54,17 @@ type pending struct {
 	req    approval.Request
 	at     time.Time
 	answer chan approval.Decision
+}
+
+// importing is the import page: a .env file's path, then what it holds
+// and what to do with the names KeyBar already has.
+type importing struct {
+	path   string
+	plan   *importer.Plan
+	err    string
+	chosen int  // the conflict chosen with ↑↓
+	shred  bool // remove the file once every value is in KeyBar
+	typing bool // the new name's field has the focus
 }
 
 // form is the add or rotate form.
@@ -87,6 +104,11 @@ type app struct {
 
 	pending []*pending
 
+	imp        importing
+	agents     *agents.Env     // the agents on this computer
+	agentState []agents.Status // as last read
+	agentErr   map[string]string
+
 	// settings being edited
 	editDays, editRemind, editGrant string
 
@@ -111,10 +133,11 @@ type app struct {
 	openURL      func(string)                 //
 	winDrag      func(phase int)              // moves the panel
 	moving       bool
+	pickFile     func(done func(path string)) // a file dialog; nil: none
 }
 
 func newApp(v *vault.Vault) *app {
-	a := &app{v: v, grants: &approval.Grants{}, syncing: map[string]bool{}, syncMsg: map[string]string{}, chosen: 0}
+	a := &app{v: v, grants: &approval.Grants{}, syncing: map[string]bool{}, syncMsg: map[string]string{}, agentErr: map[string]string{}}
 	a.now = time.Now
 	a.settings = vault.LoadSettings(v.Dir)
 	a.syncer = &remote.Syncer{Token: v.Value}
@@ -274,6 +297,12 @@ func (a *app) back() {
 		} else {
 			a.page = pageList
 		}
+	case pageImport:
+		if a.imp.plan != nil {
+			a.imp.plan, a.imp.err = nil, ""
+			return
+		}
+		a.page = pageList
 	case pageDetail, pageLog, pageSettings:
 		a.page = pageList
 	default:
@@ -312,6 +341,9 @@ func (a *app) openSettings() { a.openTab(a.tab) }
 func (a *app) openTab(t int) {
 	a.tab = max(0, min(t, len(tabNames)-1))
 	a.page = pageSettings
+	if a.tab == tabAgents {
+		a.refreshAgents()
+	}
 	days := a.inv.RotateDays
 	if days == 0 {
 		days = vault.DefaultRotateDays
@@ -702,6 +734,164 @@ func (a *app) applyNumber(which string) {
 	a.trayChanged()
 }
 
+// Agents
+
+func (a *app) refreshAgents() {
+	if a.agents == nil {
+		a.agentState = nil
+		return
+	}
+	a.agentState = a.agents.Status()
+}
+
+// connectAgent adds KeyBar to the agent's MCP settings, or removes it.
+func (a *app) connectAgent(ag agents.Agent, on bool) {
+	if a.agents == nil {
+		return
+	}
+	var err error
+	if on {
+		_, err = a.agents.Connect(ag)
+	} else {
+		_, err = a.agents.Disconnect(ag)
+	}
+	delete(a.agentErr, ag.ID)
+	a.refreshAgents()
+	if err != nil {
+		a.agentErr[ag.ID] = err.Error()
+		a.say(ag.Name + "：" + err.Error())
+		return
+	}
+	act := map[bool]string{true: "connect", false: "disconnect"}[on]
+	_ = a.v.Log(vault.Event{Client: "app", Action: act, Decision: "ok", Detail: ag.Name})
+	if on {
+		a.say("已连接 " + ag.Name + "：重启它（或开新会话）后生效")
+	} else {
+		a.say("已断开 " + ag.Name)
+	}
+}
+
+// connectAll connects every agent installed and not connected.
+func (a *app) connectAll() {
+	n := 0
+	for _, s := range a.agentState {
+		if s.State == agents.NotConnected || s.State == agents.Outdated {
+			a.connectAgent(s.Agent, true)
+			if a.agentErr[s.ID] == "" {
+				n++
+			}
+		}
+	}
+	if n > 1 {
+		a.say(fmt.Sprintf("已连接 %d 个代理：重启它们（或开新会话）后生效", n))
+	}
+}
+
+// toConnect counts the agents installed but not connected.
+func (a *app) toConnect() int {
+	n := 0
+	for _, s := range a.agentState {
+		if s.State == agents.NotConnected || s.State == agents.Outdated {
+			n++
+		}
+	}
+	return n
+}
+
+// Import
+
+func (a *app) openImport() {
+	a.imp = importing{}
+	a.page = pageImport
+}
+
+// expandHome reads ~/ as the home folder.
+func expandHome(p string) string {
+	p = strings.Trim(strings.TrimSpace(p), `"'`)
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[1:])
+		}
+	}
+	return p
+}
+
+// readImport reads the file and compares it with KeyBar.
+func (a *app) readImport() {
+	path := expandHome(a.imp.path)
+	if path == "" {
+		a.imp.err = "输入 .env 文件的路径，或拖进来"
+		return
+	}
+	if st, err := os.Stat(path); err == nil && st.IsDir() {
+		path = filepath.Join(path, ".env")
+	}
+	plan, err := importer.Read(a.v, path, "", "")
+	if err != nil {
+		a.imp.err = err.Error()
+		return
+	}
+	a.imp.plan, a.imp.err, a.imp.chosen = plan, "", 0
+}
+
+// importChoose changes the chosen conflict's choice by d (wrapping).
+func (a *app) importChoose(d int) {
+	cs := a.imp.plan.Conflicts()
+	if len(cs) == 0 {
+		return
+	}
+	it := cs[max(0, min(a.imp.chosen, len(cs)-1))]
+	it.Choice = importer.Choice((int(it.Choice) + d + 3) % 3)
+}
+
+// applyImport imports what the plan says.
+func (a *app) applyImport() {
+	p := a.imp.plan
+	if p == nil {
+		a.readImport()
+		return
+	}
+	for _, it := range p.Conflicts() {
+		if it.Choice == importer.Rename {
+			if err := p.CheckName(a.v, it, strings.TrimSpace(it.NewName)); err != nil {
+				a.imp.err = it.Var + "：" + err.Error()
+				return
+			}
+		}
+	}
+	r := p.Apply(a.v)
+	msg := "导入：" + r.Summary()
+	if path, err := p.WriteMapping(r); err != nil {
+		msg += "；写 keys.toml 失败：" + err.Error()
+	} else if path != "" {
+		msg += "；改名的记在 keys.toml"
+	}
+	if len(r.Failed) > 0 {
+		msg += "；" + r.Failed[0]
+	}
+	if a.imp.shred && r.Complete() {
+		if err := project.Shred(p.Path); err != nil {
+			msg += "；删除 .env 失败：" + err.Error()
+		} else {
+			msg += "；已删除 .env"
+		}
+	}
+	var names []string
+	for _, k := range r.Env {
+		if !slices.Contains(names, k) {
+			names = append(names, k)
+		}
+	}
+	slices.Sort(names)
+	_ = a.v.Log(vault.Event{Client: "app", Action: "import", Keys: names, Decision: "ok", Detail: p.Path})
+	a.imp = importing{}
+	a.reload()
+	a.page = pageList
+	a.focusInput = true
+	a.say(msg)
+	a.trayChanged()
+}
+
 // mcpConfig is the snippet for an agent's MCP settings.
 func (a *app) mcpConfig(client string) string {
 	exe := a.exe
@@ -709,7 +899,11 @@ func (a *app) mcpConfig(client string) string {
 		exe = "keys"
 	}
 	q := strconv.Quote(exe)
-	return fmt.Sprintf("{\n  \"mcpServers\": {\n    \"keybar\": {\n      \"command\": %s,\n      \"args\": [\"mcp\", \"--client\", %q]\n    }\n  }\n}", q, client)
+	args := `["mcp"]`
+	if client != "" {
+		args = fmt.Sprintf(`["mcp", "--client", %q]`, client)
+	}
+	return fmt.Sprintf("{\n  \"mcpServers\": {\n    \"keybar\": {\n      \"command\": %s,\n      \"args\": %s\n    }\n  }\n}", q, args)
 }
 
 // accessFor are the latest events of a key, newest first.

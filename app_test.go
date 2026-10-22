@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"keybar/agents"
 	"keybar/approval"
+	"keybar/importer"
 	"keybar/vault"
 
 	"github.com/egoist/mygo/ui"
@@ -42,6 +44,8 @@ func newHarness(t *testing.T) *harness {
 	a.now = func() time.Time { return h.clock }
 	a.demo = true
 	a.exe = "/Applications/KeyBar.app/Contents/MacOS/KeyBar"
+	a.agents = demoAgents(a.exe)
+	t.Cleanup(func() { os.RemoveAll(a.agents.Home) })
 	a.settings.Shortcut = defaultShortcut
 	a.post = func(fn func()) {
 		h.mu.Lock()
@@ -306,7 +310,11 @@ func TestScreenshots(t *testing.T) {
 			tt.Advance(2 * time.Second)
 			tt.Frame()
 			suffix := map[bool]string{false: "light", true: "dark"}[dark]
-			save(t, filepath.Join("shots", name+"-"+suffix+".png"), tt)
+			dir := "shots"
+			if d := os.Getenv("KEYBAR_SHOTS"); d != "" {
+				dir = d
+			}
+			save(t, filepath.Join(dir, name+"-"+suffix+".png"), tt)
 			if os.Getenv("KEYBAR_DOCS") == "1" {
 				save(t, filepath.Join("docs", "screenshots", name+"-"+suffix+".png"), tt)
 			}
@@ -326,6 +334,21 @@ func TestScreenshots(t *testing.T) {
 	shot("settings-agents", panelWidth, func(h *harness, tt *ui.Tester) {
 		h.grants.Add("mcp:claude-code", []string{"DEEPSEEK_API_KEY"}, h.clock.Add(10*time.Minute))
 		h.openTab(tabAgents)
+	})
+	shot("import", panelWidth, func(h *harness, tt *ui.Tester) {
+		h.pickFile = func(func(string)) {}
+		h.openImport()
+		h.imp.path = "~/code/my-app/.env"
+	})
+	shot("import-conflicts", panelWidth, func(h *harness, tt *ui.Tester) {
+		h.openImport()
+		h.imp.path = demoEnvFile()
+		h.readImport()
+		h.imp.plan.Path = "/Users/me/code/my-app/.env"
+		cs := h.imp.plan.Conflicts()
+		cs[0].Choice = importer.Rename
+		cs[1].Choice = importer.Overwrite
+		h.imp.chosen = 0
 	})
 	shot("settings-general", panelWidth, func(h *harness, tt *ui.Tester) { h.openTab(tabGeneral) })
 	shot("shortcuts", panelWidth, func(h *harness, tt *ui.Tester) { h.cheat = true })
@@ -403,4 +426,107 @@ func TestFilters(t *testing.T) {
 	if h.filter != filterAll || len(h.rows()) != len(h.inv.Keys) {
 		t.Errorf("⌘1: filter %d, %d rows", h.filter, len(h.rows()))
 	}
+}
+
+func TestConnectAgentsUI(t *testing.T) {
+	h := newHarness(t)
+	tt := h.tester(panelWidth)
+	tt.Key(ui.Cmd, ui.KeyComma)
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.Key2)
+	tt.Frame()
+	if h.page != pageSettings || h.tab != tabAgents {
+		t.Fatalf("page %v tab %v", h.page, h.tab)
+	}
+	states := map[string]agents.State{}
+	for _, s := range h.agentState {
+		states[s.ID] = s.State
+	}
+	if states["claude-code"] != agents.Connected || states["cursor"] != agents.NotConnected || states["codex"] != agents.NotInstalled {
+		t.Fatalf("%v", states)
+	}
+	if !tt.HasText("连接 AI 代理") || !tt.HasText("已连接 · ~/.claude.json") || !tt.HasText("未连接 · ~/.cursor/mcp.json") || !tt.HasText("未安装") {
+		t.Errorf("%q", tt.Texts())
+	}
+	tt.Key(ui.Cmd, ui.KeyEnter) // connect all: Cursor
+	tt.Frame()
+	b, err := os.ReadFile(filepath.Join(h.agents.Home, ".cursor", "mcp.json"))
+	if err != nil || !strings.Contains(string(b), `"`+h.exe+`"`) || !strings.Contains(string(b), `"cursor"`) {
+		t.Errorf("cursor: %s %v", b, err)
+	}
+	if !strings.Contains(h.toast, "Cursor") {
+		t.Errorf("toast %q", h.toast)
+	}
+	h.connectAgent(agents.All[0], false)
+	if h.agentState[0].State != agents.NotConnected {
+		t.Error("not disconnected")
+	}
+	b, _ = os.ReadFile(filepath.Join(h.agents.Home, ".claude.json"))
+	if strings.Contains(string(b), "keybar") {
+		t.Errorf("claude: %s", b)
+	}
+	if evs := vault.ReadLog(h.v.Dir, 0, func(e vault.Event) bool { return e.Action == "connect" || e.Action == "disconnect" }); len(evs) != 2 {
+		t.Errorf("log %v", evs)
+	}
+}
+
+func TestImportUI(t *testing.T) {
+	h := newHarness(t)
+	tt := h.tester(panelWidth)
+	tt.Key(ui.Cmd, ui.KeyI)
+	if h.page != pageImport {
+		t.Fatal("⌘I")
+	}
+	path := demoEnvFile()
+	defer os.RemoveAll(filepath.Dir(filepath.Dir(path)))
+	h.imp.path = filepath.Dir(path) // a folder: its .env
+	h.readImport()
+	if h.imp.err != "" || h.imp.plan == nil {
+		t.Fatal(h.imp.err)
+	}
+	tt.Frame()
+	cs := h.imp.plan.Conflicts()
+	if len(cs) != 2 || cs[0].Key != "OPENAI_API_KEY" || cs[1].Key != "RAILWAY_TOKEN" || cs[0].NewName != "OPENAI_API_KEY_MY_APP" {
+		t.Fatalf("%+v", cs)
+	}
+	if !tt.HasText("同名但值不同 2") || !tt.HasText("出现 2 次，用第 7 行") || !tt.HasText("已有，值相同 · 跳过") || !tt.HasText("导入 1 个  "+hk("⌘↵")) {
+		t.Errorf("%q", tt.Texts())
+	}
+	for _, v := range []string{"sk-example-openai-other", "example-railway-other", "sk-example-stripe-0002"} {
+		if tt.HasText(v) {
+			t.Errorf("shows a value %s", v)
+		}
+	}
+	// Keyboard: → on the first makes it 覆盖, again 改名; ↓ then → on the
+	// second: 覆盖.
+	tt.Key(0, ui.KeyRight)
+	tt.Key(0, ui.KeyRight)
+	tt.Frame()
+	tt.Key(0, ui.KeyDown)
+	tt.Key(0, ui.KeyRight)
+	tt.Frame()
+	if cs[0].Choice != importer.Rename || cs[1].Choice != importer.Overwrite {
+		t.Fatalf("choices %v %v", cs[0].Choice, cs[1].Choice)
+	}
+	if !tt.HasText("变量名不变，记在 keys.toml") || !tt.HasText("导入 3 个  "+hk("⌘↵")) {
+		t.Errorf("%q", tt.Texts())
+	}
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	h.run()
+	if h.page != pageList || !strings.Contains(h.toast, "新增 1 个") || !strings.Contains(h.toast, "覆盖 1 个") || !strings.Contains(h.toast, "改名导入 1 个") {
+		t.Errorf("page %v toast %q", h.page, h.toast)
+	}
+	val := func(n string) string { b, _ := h.v.Value(n); return string(b) }
+	if val("OPENAI_API_KEY_MY_APP") != "sk-example-openai-other" || val("OPENAI_API_KEY") != "sk-example-openai-0000" ||
+		val("RAILWAY_TOKEN") != "example-railway-other" || val("STRIPE_SECRET_KEY") != "sk-example-stripe-0002" {
+		t.Error("values")
+	}
+	k, _ := h.key("RAILWAY_TOKEN")
+	if len(k.History) != 2 || len(k.Pending()) != 3 {
+		t.Errorf("overwrite is not a rotation: %+v", k.History)
+	}
+	if b, err := os.ReadFile(filepath.Join(filepath.Dir(path), "keys.toml")); err != nil || !strings.Contains(string(b), `OPENAI_API_KEY = "OPENAI_API_KEY_MY_APP"`) {
+		t.Errorf("keys.toml %s %v", b, err)
+	}
+	noValues(t, h.v.Dir, "sk-example-openai-other", "example-railway-other")
 }
