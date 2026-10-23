@@ -82,8 +82,7 @@ func (s *shell) ready() {
 	// Use a standard, titled window (with traffic lights) instead of a borderless panel.
 	// Keep LSUIElement (menubar-only) so there is no Dock icon; closing hides the window.
 	s.panel = mygo.NewWindow(mygo.WindowOptions{
-		Title: "KeyBar",
-		Panel: false, Hidden: true, Frameless: false, Transparent: false,
+		Title: "KeyBar", Panel: false, Hidden: true, Frameless: false, Transparent: false,
 		Width: panelWidth, Height: panelHeight, MinWidth: minWidth, MinHeight: minHeight,
 		Content: ui.View(a.view),
 	})
