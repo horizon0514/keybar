@@ -139,9 +139,9 @@ func (a *app) keysList(c *ui.Context) {
 	case c.Shortcut(0, ui.KeyUp):
 		a.choose(a.chosen - 1)
 	case c.Shortcut(0, ui.KeyEnter):
-		// Enter copies the value — the main path is search → list → copy.
+		// Enter opens detail; copying is an explicit action (⌘C or button).
 		if k, ok := a.chosenKey(); ok {
-			a.copyValue(k.Name)
+			a.openDetail(k.Name)
 		}
 	case c.Shortcut(ui.Cmd, ui.KeyN):
 		a.openAdd()
@@ -261,7 +261,7 @@ func (a *app) header(c *ui.Context, k ink) {
 		}
 		if in.Submitted() {
 			if key, ok := a.chosenKey(); ok {
-				a.copyValue(key.Name)
+				a.openDetail(key.Name)
 			}
 		}
 		if a.focusInput {
@@ -350,8 +350,8 @@ func (a *app) row(c *ui.Context, k ink, i int, key vault.Key) {
 	case row.Hovered():
 		bg = k.hover
 	}
-	// Click copies the secret; Enter/Cmd+C also copy.
-	row.Background(bg).OnClick(func() { a.choose(i); a.copyValue(key.Name) })
+	// Click selects and opens detail; copying is explicit (⌘C or button).
+	row.Background(bg).OnClick(func() { a.choose(i); a.openDetail(key.Name) })
 	row.Children(func() {
 		// Minimal row: status dot + key name only.
 		ui.Box(c).Size(6, 6).Radius(3).Background(k.state(st.State)).Shrink(0)
@@ -1309,7 +1309,8 @@ func (a *app) cheatsheet(c *ui.Context, k ink) {
 	rows := [][3]string{
 		{"列表", "直接打字", "搜索名称、说明、平台、项目"},
 		{"", "↑ ↓", "选择"},
-		{"", "↵  ⌘C", "复制值（30 秒后清除剪贴板）"},
+		{"", "↵", "打开详情：勾选平台、添加平台、删除"},
+		{"", "⌘C", "复制值（30 秒后清除剪贴板）"},
 		{"", "⌘N", "添加密钥"},
 		{"", "", ""},
 		{"详情", "⌘R  ⌘C", "轮换 / 复制值"},

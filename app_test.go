@@ -115,8 +115,8 @@ func TestDetailAndRotate(t *testing.T) {
 	h := newHarness(t)
 	tt := h.tester(panelWidth)
 	h.choose(indexOf(h.rows(), "RAILWAY_TOKEN"))
-	// Enter now copies; open the detail explicitly.
-	h.openDetail("RAILWAY_TOKEN")
+	// Enter opens the detail.
+	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
 	if h.page != pageDetail || h.detail != "RAILWAY_TOKEN" {
 		t.Fatalf("page %v %s", h.page, h.detail)
