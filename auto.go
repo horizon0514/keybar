@@ -133,6 +133,12 @@ func (a *app) offerClip(text string) {
 
 // haveValue tells whether a key in KeyBar has this value.
 func (a *app) haveValue(v []byte) bool {
+	// On real system keychains, do not read secrets just to dedupe a clipboard offer:
+	// defer unlocks until an action truly needs the plaintext (copy/rotate/delete/CLI/MCP).
+	// In tests and demo (in-memory store), preserve the existing behavior.
+	if _, isSystem := a.v.Secrets.(systemSecrets); isSystem {
+		return false
+	}
 	var names []string
 	for _, k := range a.inv.Keys {
 		names = append(names, k.Name)
@@ -237,6 +243,23 @@ func unmanaged(v *vault.Vault, path string) int {
 	f, ok := scan.ReadEnv(path)
 	if !ok {
 		return 0
+	}
+	// Avoid reading from the OS keychain in background watches:
+	// when using the real system store, rely on inventory metadata only.
+	if _, isSystem := v.Secrets.(systemSecrets); isSystem {
+		inv, err := v.Inventory()
+		if err != nil {
+			return 0
+		}
+		n := 0
+		for _, vv := range f.Vars {
+			if secret.Likely(vv.Name, vv.Value) {
+				if _, ok := inv.Find(vv.Name); !ok {
+					n++
+				}
+			}
+		}
+		return n
 	}
 	p, err := importer.FromVars(v, f.Path, f.Project, "", f.Vars)
 	if err != nil {
