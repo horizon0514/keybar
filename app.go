@@ -109,6 +109,7 @@ type app struct {
 	toast   string
 	cheat   bool
 	confirm bool // the delete dialog
+	showDetailMore bool // advanced sections on the detail page unfolded
 
 	form    form
 	meta    metaEdit
@@ -298,6 +299,7 @@ func (a *app) openDetail(name string) {
 		return
 	}
 	a.detail, a.page, a.addPlat, a.confirm = name, pageDetail, "", false
+	a.showDetailMore = false
 	a.loadMeta(k)
 	for i, row := range a.rows() { // the list shows it chosen
 		if row.Name == name {
