@@ -26,6 +26,7 @@ func actions(v *vault.Vault) []string {
 
 func TestClipboardOffer(t *testing.T) {
 	h := newHarness(t)
+	h.settings.Clipboard = true
 	f := &clip.Fake{Text: "whatever was there"}
 	h.startAuto(f, true)
 	h.clipTick() // learns what is there
@@ -112,6 +113,7 @@ func TestClipboardOffer(t *testing.T) {
 
 func TestEnvNoticeAndScan(t *testing.T) {
 	h := newHarness(t)
+	h.settings.WatchEnv = true
 	home := h.agents.Home
 	demoScanHome(home)
 	h.startAuto(nil, false)

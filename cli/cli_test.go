@@ -407,8 +407,11 @@ func TestRunAutoDetect(t *testing.T) {
 	if slices.Contains(x.ran.Env, "OPENAI_API_KEY=your-key-here") || slices.Contains(x.ran.Env, "PORT=3000") {
 		t.Error("used the example's values")
 	}
-	if e := x.err.String(); !strings.Contains(e, "注入 OPENAI_API_KEY") || !strings.Contains(e, "KeyBar 里没有 PORT，跳过") {
+	if e := x.err.String(); !strings.Contains(e, "注入 OPENAI_API_KEY") {
 		t.Errorf("note: %q", e)
+	}
+	if e := x.err.String(); strings.Contains(e, "PORT") {
+		t.Errorf("PORT should not be offered: %q", e)
 	}
 	// Without a terminal it asks, for exactly those keys.
 	x.tty = false

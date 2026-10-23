@@ -42,7 +42,8 @@ func TestDetectStopsAtGitRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r.Env) != 2 || r.Env["OPENAI_API_KEY"] != "OPENAI_API_KEY" || strings.Join(r.Missing, ",") != "PORT,STRIPE_KEY" || r.Toml != "" {
+	// Held names inject even if not *KEY*-shaped; missing PORT is not offered.
+	if len(r.Env) != 2 || r.Env["OPENAI_API_KEY"] != "OPENAI_API_KEY" || r.Env["DATABASE_URL"] != "DATABASE_URL" || strings.Join(r.Missing, ",") != "STRIPE_KEY" || r.Toml != "" {
 		t.Errorf("%+v", r)
 	}
 	// keys.toml maps a variable to another key, and wins.

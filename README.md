@@ -1,43 +1,34 @@
 # KeyBar
 
-把 API key 从 `.env` 和 shell 环境变量里搬出来：**值只存在系统钥匙串里**，程序和 AI 代理用的时候临时注入、要你点头，用完不留痕；同时记着每个 key 还存在哪些平台、什么时候该轮换。
+几个 API key 的轻量钥匙串：**存、复制、轮换**。值只在系统钥匙串里；菜单栏里搜一下、`⌘C` 复制；到期点「自动轮换」，粘贴新值后 GitHub Actions / Vercel 自动推送，其它平台进清单。
 
-- **钥匙串**：macOS 钥匙串 / Windows 凭据管理器 / Linux Secret Service（GNOME Keyring、KWallet）。KeyBar 自己的文件里只有元数据，没有值。
-- **不用写配置**：密钥名就是环境变量名。`keys run` 看项目的 `.env.example` / `.env` 里有哪些变量名，KeyBar 里有同名的就注入。
-- **一键连接 AI 代理**：设置里点一下（或 `keys connect`），KeyBar 就加进已安装的 AI 代理和编辑器的 MCP 设置（Claude Code、Cursor、Codex、Gemini CLI、opencode、pi 等 19 种，见[下表](#支持的代理)）。代理用 `run_with_secrets` 带着 key 跑命令，输出里的值被替换成 `[REDACTED:NAME]`。每次使用都要你在菜单栏里批准，全部记日志。
-- **导入 `.env`**：同名但值不同时逐个决定：保留现有、覆盖（记为一次轮换）、或改名导入。
-- **自动录入**：一键扫描本机的 `.env` 和 shell 配置里的 `export`，勾选导入（可选导入后从文件移除明文，先备份）；复制了认得出的 key（OpenAI、Anthropic、GitHub、AWS、Stripe……）面板顶上提示保存；`keys run` 或代理缺 key 时当场粘贴补上；项目里出现新的 `.env` 时提醒导入。见[自动录入](#自动录入)。
-- **菜单栏 / 托盘**：键盘优先的两栏面板（左边清单、右边详情，`⌘1` `⌘2` `⌘3` 切换“全部 / 需处理 / 代理禁用”），批准请求、查看清单、轮换；每天提醒超期和快到期的 key，图标上有角标。
-- **轮换清单**：换新值后自动更新 GitHub Actions secrets 和 Vercel 环境变量，其余平台（Railway、TiDB Cloud、`.env`……）列成清单逐个勾掉。
+- **钥匙串**：macOS 钥匙串 / Windows 凭据管理器 / Linux Secret Service。KeyBar 自己的文件里只有名字、平台、日期，没有值。
+- **菜单栏**：两栏清单 / 详情。添加只要名称 + 值（说明可选）；平台、轮换周期、标签在详情里以后再填。
+- **自动轮换**：提醒或详情里一点 → 粘贴新值 → 能自动同步的平台（GitHub Actions secrets、Vercel 环境变量）马上推；其余（Railway、TiDB、`.env`…）列成勾选清单。
+- **扫描 / 连接代理（可选）**：扫描只认真正的 key（`*KEY*` / `*TOKEN*` / 认得出的格式），不把 `PORT` 推到脸上；连接代理优先显示已安装的。剪贴板检测、新 `.env` 提醒默认关闭。
 
 ![列表](docs/screenshots/list-light.png)
 
-| 详情与平台清单 | 代理请求批准 | 访问记录 |
+| 添加（名称 + 值） | 详情与轮换 | 设置 |
 |---|---|---|
-| ![详情](docs/screenshots/detail-light.png) | ![批准](docs/screenshots/approval-light.png) | ![记录](docs/screenshots/log-light.png) |
+| ![添加](docs/screenshots/add-light.png) | ![详情](docs/screenshots/detail-light.png) | ![设置](docs/screenshots/settings-general-light.png) |
 
-| 连接 AI 代理 | 导入时的同名冲突 | 深色 |
+| 轮换 | 深色列表 | 连接 AI 代理（可选） |
 |---|---|---|
-| ![代理](docs/screenshots/settings-agents-light.png) | ![导入](docs/screenshots/import-conflicts-light.png) | ![深色](docs/screenshots/list-dark.png) |
+| ![轮换](docs/screenshots/rotate-light.png) | ![深色](docs/screenshots/list-dark.png) | ![代理](docs/screenshots/settings-agents-light.png) |
 
-| 扫描本机 | 剪贴板里的 key | 代理缺 key 时当场补上 |
-|---|---|---|
-| ![扫描](docs/screenshots/scan-light.png) | ![剪贴板](docs/screenshots/clipboard-notice-light.png) | ![补录](docs/screenshots/approval-missing-light.png) |
+更多：[扫描本机](docs/screenshots/scan-light.png) · [导入](docs/screenshots/import-light.png) · [访问记录](docs/screenshots/log-light.png) · [快捷键](docs/screenshots/shortcuts-light.png) · [批准（MCP，可选）](docs/screenshots/approval-light.png)。
 
-更多：[新 .env 提醒](docs/screenshots/env-notice-light.png) · [设置 › 自动录入](docs/screenshots/settings-auto-light.png) · [轮换](docs/screenshots/rotate-light.png) · [快捷键](docs/screenshots/shortcuts-light.png) · [搜索无结果](docs/screenshots/empty-search-dark.png) · [添加](docs/screenshots/add-light.png) · [导入](docs/screenshots/import-light.png)。
-
-Linux（Xvfb + openbox）实机截图：[列表](docs/screenshots/linux-list.png) · [详情](docs/screenshots/linux-detail.png) · [端到端测试里 MCP 请求的批准](docs/screenshots/linux-e2e-approval.png) · [命令行请求（输出不脱敏的提醒）](docs/screenshots/linux-e2e-cli-approval.png)。
+Linux 实机截图：[列表](docs/screenshots/linux-list.png) · [详情](docs/screenshots/linux-detail.png) · [端到端批准](docs/screenshots/linux-e2e-approval.png)。
 
 ## 为什么
 
-供应链攻击（比如被投毒的 PyPI / npm 包）拿到的第一样东西就是 `os.environ` 和项目里的 `.env`。把所有 key 常驻在 shell 环境变量里，等于让每个子进程、每个依赖、每个 AI 代理都能读到全部 key。KeyBar 的做法：
+供应链攻击（比如被投毒的 PyPI / npm 包）拿到的第一样东西就是 `os.environ` 和项目里的 `.env`。几个真正的 API key 不该和 `PORT`、`NODE_ENV` 挤在同一个明文文件里，也不该常驻在 shell 环境变量里。KeyBar 的做法：
 
 1. 值只在钥匙串里，磁盘上没有明文副本；
-2. 一个命令只拿到它的项目用到的那几个 key（`.env.example` 里列出的名字），而且只在它的进程里；
-3. 代理默认看不到值：它让 KeyBar 去跑命令，拿回脱敏后的输出；
-4. 非交互的访问（代理、脚本）都要你批准，可以“允许一次”“允许 15 分钟”或拒绝，按“客户端 × key”分别记；
-5. 每次访问写进访问记录；
-6. 被通报泄露时，`keys rotate` 一条命令换值、同步到能自动同步的平台，剩下的列清单。
+2. 平时就是一个钥匙串列表：搜、复制、看上次轮换；
+3. 到期或泄露时，粘贴新值 → 自动推到能推的平台，剩下的有清单；
+4. 需要时才用 `keys run` / MCP：命令只拿到它要用的那几个 key，代理默认看不到明文，非交互访问要你批准并记日志。
 
 ## 安装
 
@@ -57,51 +48,43 @@ macOS 版是 ad hoc 签名（标识 `dev.horizon.keybar`，签名要求只看标
 
 ## 三步上手
 
-**1. 把 `.env` 收进钥匙串**
+**1. 把 key 加进钥匙串**
+
+菜单栏按 `⌘N`（或托盘「添加密钥」）：填**名称**和**值**，说明可选。平台、轮换周期、标签以后在详情里补。
+
+已有 `.env` 时也可以一次收进来：
 
 ```sh
 cd ~/code/my-app
-keys import .env          # 或在面板里按 ⌘I
+keys import .env          # 或面板里 ⌘I；同名不同值会逐个问你
 ```
 
-变量名就是密钥名。遇到 KeyBar 里已有的名字：
+扫描本机（设置 › 自动录入 ›「扫描本机…」，或 `keys scan`）只勾选像密钥的项。
 
-- 值相同：直接跳过（只计数）；
-- 值不同：逐个问你——`k` 保留现有、`o` 覆盖（旧值记为一次轮换，其它平台进清单）、`r` 改名导入（默认 `名字_项目名`，比如 `OPENAI_API_KEY_MY_APP`，可以改）。改名的会记进项目的 `keys.toml`，`keys run` 仍按原来的变量名注入；
-- 同一个文件里重复的变量：用最后一个，并提示你。
+**2. 需要时复制**
 
-没有终端时（脚本、代理）不会问，用 `--on-conflict skip|overwrite|rename` 指定，默认 `skip` 并在最后汇总。值从不打印，只在比较时读取。全部导入后可以 `--shred` 覆盖并删除 `.env`。
+清单里选中 → `⌘C`（约 30 秒后清剪贴板），或打开详情点「复制值」。
 
-**2. 运行程序**
+**3. 到期就轮换**
+
+超期 / 快到期时菜单栏有角标，通知和托盘可以直接「自动轮换」：
+
+1. 在服务商那里生成新密钥，粘贴进 KeyBar；
+2. 保存后钥匙串更新；GitHub Actions secrets、Vercel 环境变量自动推送（需 KeyBar 里有 `GITHUB_TOKEN` / `VERCEL_TOKEN`）；
+3. 其它平台留在详情的勾选清单里，改完勾掉。
 
 ```sh
-keys run -- npm run dev
+keys rotate OPENAI_API_KEY
+keys done OPENAI_API_KEY all
 ```
 
-不用写任何配置：`keys run` 从当前目录往上到 git 仓库根，读 `.env.example`、`.env.sample`、`.env`（以及 `.env.template`、`.env.local`）里的**变量名**（不读值），KeyBar 里有同名密钥的就注入到这个进程；没有的跳过，并在 stderr 提一句。想指定就 `-e NAME` 或 `-e DATABASE_URL=TIDB_PROD_URL`。
+---
 
-**3. 连接 AI 代理**
+想让本地程序或 AI 代理经 KeyBar 取用，见下面的 [`keys run`](#命令行) 和[给 AI 代理用（MCP）](#给-ai-代理用mcp)——都是可选能力，不是上手必经之路。
 
-设置 → AI 代理 →「连接」（`⌘↵` 全部连接），或：
+## 自动录入（可选）
 
-```sh
-keys connect              # 连接所有已安装的（列表见下表）
-keys connect --status     # ● 已连接  ○ 未连接
-keys connect opencode zed # 只连这几个
-keys disconnect cursor
-```
-
-它把 `keybar` 这一项加进每个代理自己的 MCP 设置（路径见[下表](#支持的代理)）：只改 `keybar` 这一项，其它设置和注释原样保留，改之前把原文件备份成 `*.keybar-backup`，写入是原子的，已经连好就什么都不写；文件读不懂就不改并告诉你。重启代理（或开新会话）后，代理这样用：
-
-> 你：跑一下集成测试
->
-> 代理 → `run_with_secrets {"command": "npm test", "cwd": "/Users/me/code/my-app"}`
->
-> KeyBar 弹出批准：Claude Code 要用 OPENAI_API_KEY、DATABASE_URL 运行 `npm test` → 你按 `↵`
->
-> 代理拿到：`injected: DATABASE_URL, OPENAI_API_KEY` + 退出码 + 输出（值都是 `[REDACTED:…]`）
-
-## 自动录入
+剪贴板检测和新 `.env` 提醒**默认关闭**，在设置 › 自动录入里打开。
 
 **扫描本机**（设置 › 自动录入 ›「扫描本机…」、托盘菜单，或 `keys scan`）：在 `~/code`、`~/projects`、`~/dev`、`~/src`、`~/workspace`、`~/Documents/GitHub` 和主目录的第一层里找 `.env`、`.env.local`、`.env.*`（不含 `.example` / `.sample` / `.template`），跳过 `node_modules`、`.git`、`vendor`、`build`、`Library` 等和隐藏目录；再看 `~/.zshrc`、`~/.zshenv`、`~/.zprofile`、`~/.bashrc`、`~/.bash_profile`、`~/.profile`、fish 的 `config.fish` 里写死值的 `export NAME=value`（`$VAR`、`$(…)` 这种不算）。位置可以在设置里改。
 
@@ -178,9 +161,9 @@ DATABASE_URL = "TIDB_PROD_URL"
 
 `keys run` 和 `run_with_secrets` 从当前目录往上找它，它的映射优先于自动检测。里面写了像真实密钥的值（`sk-…`、`ghp_…`、带 `:/@+=` 的长串）会直接报错。
 
-## 给 AI 代理用（MCP）
+## 给 AI 代理用（MCP，可选）
 
-用 `keys connect` 或设置里的「连接」即可。
+不是主路径。用得着时：`keys connect` 或设置 › AI 代理 ›「连接」。
 
 ### 支持的代理
 
@@ -259,14 +242,11 @@ KEYBAR_DEMO=1 go run .                  # 示例数据（内存钥匙串），�
 
 ## English
 
-KeyBar keeps API keys in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of `.env` files and shell environments, and tracks where else each key lives and when it is due for rotation.
+KeyBar is a lightweight keychain for a few API keys: **store, copy, rotate**. Values live in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service); metadata (where else each key lives, last rotation) stays in KeyBar's own files.
 
-- `keys import .env` moves a project's keys into the keychain; for names it already has with a different value it asks per key: keep, overwrite (recorded as a rotation) or import under a new name (`NAME_PROJECT` by default). Without a terminal, `--on-conflict skip|overwrite|rename` (default skip).
-- `keys run -- cmd` needs no config: it reads the variable names (never values) in `.env.example` / `.env.sample` / `.env` from the current folder up to the git root and injects the keys KeyBar holds under those names into that one process; `keys.toml` (names only) can map a variable to a differently named key. `--redact` scrubs values from its output.
-- `keys connect` (or Settings → AI 代理 → 连接) adds KeyBar's MCP server to every installed agent it knows — Claude Code, Cursor, Codex, Gemini CLI, Qwen Code, opencode, pi, Kimi Code, iFlow CLI, Crush, Amp, Goose, DeepSeek Harness, Claude Desktop, VS Code, Windsurf, Zed, Kiro, Cline — merging into their settings (JSONC comments kept, TOML/YAML edited in place) with a backup, refusing files it cannot parse. Agents call `run_with_secrets` (keys auto-detected from the project, output redacted); `list_keys` gives metadata only; `request_secret` (raw value) is discouraged. Every use needs approval in the menu bar app (allow once / allow N minutes / deny, per client and key), falling back to a system dialog, and is written to the access log.
-- Automatic entry: `keys scan [--import] [--clean comment|names|delete]` (or Settings → 自动录入 → 扫描本机) finds `.env` files under the usual code folders and literal `export NAME=value` lines in shell rc files, pre-checks the likely secrets (by name, provider format, entropy; placeholders and `PORT`-like names excluded), shows values only as prefix + length, imports with the same duplicate handling, and can take the plain text out of each opted-in file after a backup. The app also offers to save a key of a known provider format copied to the clipboard (change count polled; concealed/transient pasteboard types skipped; nothing logged or stored unless saved), lets `keys run` at a terminal and agents' approval popups paste a missing key on the spot (never-ask per project), and reminds you of new `.env` files with unmanaged keys.
-- `keys rotate` stores a new value, pushes it to GitHub Actions secrets and Vercel env vars, and lists every other place to update as a checklist.
-- A menu bar / tray app (keyboard first) shows the inventory, approves requests, and reminds you daily of overdue keys.
-- There is deliberately no `export`.
+- Add a key with just a name and value (optional description). Platforms, rotate interval, tags live on the detail page.
+- Copy with `⌘C`. When a key is due, one-tap **自动轮换**: paste the new value, KeyBar updates the keychain, pushes to GitHub Actions secrets and Vercel env vars when it can, and leaves a checklist for everything else.
+- Optional: `keys scan` / Settings → 自动录入 (clipboard watch and new-`.env` notices default **off**); `keys run` and MCP `keys connect` for people who want injection / agent approval — not the main path.
+- There is deliberately no `export`. Multi-device sync is out of scope for now.
 
-Download from Releases, open KeyBar, and use Settings → “安装 keys 命令” to put `keys` on your PATH, then `keys import .env`, `keys run -- <cmd>`, `keys connect`. MIT licensed.
+Download from Releases, open KeyBar, Settings → “安装 keys 命令”, then add a couple of keys and copy when you need them. MIT licensed.

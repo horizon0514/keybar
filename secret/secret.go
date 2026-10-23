@@ -162,9 +162,10 @@ func entropy(s string) float64 {
 	return h
 }
 
-// Likely tells whether name=value is probably a secret: a known key
-// format, a URL with a password, or a secret's name with a value that is
-// not a placeholder.
+// Likely tells whether name=value is an obvious secret: a known provider
+// shape, a URL with a password, or a *KEY*/*TOKEN*/*SECRET*/*PASSWORD*
+// name with a real value. Random-looking values under ordinary names
+// (PORT, HOST, FEATURE_X) are not — KeyBar is for a few API keys.
 func Likely(name, value string) bool {
 	v := strings.TrimSpace(value)
 	if v == "" || Placeholder(v) {
@@ -179,13 +180,7 @@ func Likely(name, value string) bool {
 	if Plain(name) {
 		return false
 	}
-	if SecretName(name) {
-		return len(v) >= 8 && !boolish(v)
-	}
-	if urlRE.MatchString(strings.ToUpper(name)) {
-		return false
-	}
-	return Random(v)
+	return SecretName(name) && len(v) >= 8 && !boolish(v)
 }
 
 func boolish(v string) bool {
@@ -244,12 +239,13 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// Fillable are the names worth asking a value for: secret-looking, not
-// configuration (Plain), and not in never.
+// Fillable are the names worth asking a value for: the name itself looks
+// like a secret (*KEY* / *TOKEN* / *SECRET* / *PASSWORD*…), and not in never.
+// PORT、NODE_ENV、DATABASE_URL and the like are left out — use keys add.
 func Fillable(names, never []string) []string {
 	var out []string
 	for _, n := range names {
-		if Plain(n) || slices.Contains(never, n) || slices.Contains(out, n) {
+		if !SecretName(n) || slices.Contains(never, n) || slices.Contains(out, n) {
 			continue
 		}
 		out = append(out, n)

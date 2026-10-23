@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+
+	"keybar/secret"
 	"strings"
 )
 
@@ -105,10 +107,12 @@ func (r *Resolution) Keys() []string {
 	return out
 }
 
-// Resolve works out the keys for dir with no configuration: each variable
-// named in the project's .env.example / .env.sample / .env (names only)
-// gets the KeyBar key of the same name, if KeyBar has it (has tells). A
-// keys.toml, if there is one, maps variables to other keys and wins.
+// Resolve works out the keys for dir with no configuration: each
+// variable named in the project's .env.example / .env.sample / .env that
+// KeyBar already holds (same name) is injected. Names KeyBar lacks are
+// only offered to fill when they look like secrets (*KEY* / *TOKEN* /
+// *SECRET* / *PASSWORD*…) — PORT and the like are skipped (pass -e).
+// A keys.toml, if there is one, maps any names and wins.
 func Resolve(dir string, has func(string) bool) (*Resolution, error) {
 	r := &Resolution{Env: map[string]string{}}
 	if p, ok := Find(dir); ok {
@@ -133,7 +137,9 @@ func Resolve(dir string, has func(string) bool) (*Resolution, error) {
 		}
 		if has(n) {
 			r.Env[n] = n
-		} else {
+			continue
+		}
+		if secret.SecretName(n) {
 			r.Missing = append(r.Missing, n)
 		}
 	}

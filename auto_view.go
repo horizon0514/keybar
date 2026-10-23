@@ -256,7 +256,7 @@ func (a *app) scanItem(c *ui.Context, k ink, p *importer.Plan, it *importer.Item
 // The settings' 自动录入 tab.
 
 func (a *app) tabAuto(c *ui.Context, k ink) {
-	section(c, k, "剪贴板", "复制了一个认得出的 key（OpenAI、Anthropic、GitHub、AWS、Stripe…），在面板顶上提示保存。只看格式，不记录、不保存剪贴板内容；密码管理器标记为隐藏的内容不看。", func() {
+	section(c, k, "剪贴板", "默认关闭。打开后，复制了一个认得出的 key（OpenAI、Anthropic、GitHub…）时在面板顶上提示保存。只看格式，不记录剪贴板；密码管理器标记为隐藏的内容不看。", func() {
 		on := a.settings.Clipboard
 		option(c, k, "检测复制的 key", "", &on, func() {
 			a.settings.Clipboard = on
@@ -266,7 +266,7 @@ func (a *app) tabAuto(c *ui.Context, k ink) {
 			a.saveSettings(a.settings)
 		})
 	})
-	section(c, k, "新的 .env", "扫描目录里出现新的或改过的 .env，且有 KeyBar 里没有的密钥时，提醒导入。每 20 秒看一次文件的修改时间。", func() {
+	section(c, k, "新的 .env", "默认关闭。打开后，扫描目录里出现新的或改过的 .env、且有 KeyBar 里没有的密钥时，提醒导入。", func() {
 		on := a.settings.WatchEnv
 		option(c, k, "提醒新的 .env", "", &on, func() {
 			a.settings.WatchEnv = on

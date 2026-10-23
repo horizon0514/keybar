@@ -1,7 +1,7 @@
 {
   "name": "KeyBar",
   "identifier": "dev.horizon.keybar",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "copyright": "© 2026 horizon0514 · MIT",
   "out": "build",
   "macos": {
@@ -9,6 +9,6 @@
   },
   "linux": {
     "maintainer": "horizon0514 <horizon0514@users.noreply.github.com>",
-    "comment": "KeyBar：密钥放系统钥匙串，程序和 AI 代理按需取用，记录每个 key 存在哪些平台、何时轮换"
+    "comment": "KeyBar：几个 API key 放系统钥匙串，复制、轮换；到期一键推送到 GitHub / Vercel"
   }
 }

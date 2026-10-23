@@ -227,7 +227,7 @@ func (a *app) mainView(c *ui.Context, k ink) {
 			}
 		})
 		ui.Divider(c)
-		left := fmt.Sprintf("%d 个密钥 · 值在 %s", len(a.inv.Keys), storeShort())
+		left := fmt.Sprintf("%d 个 API key · 值在 %s", len(a.inv.Keys), storeShort())
 		if a.demo {
 			left = "示例数据 · " + left
 		}
@@ -285,20 +285,24 @@ func (a *app) header(c *ui.Context, k ink) {
 			badge(c, "示例数据", k.gold)
 		}
 		over, soon, pend := a.counts()
-		chip := func(n int, label string, col ui.Color) {
+		chip := func(n int, label string, col ui.Color, click func()) {
 			if n == 0 {
 				return
 			}
-			ui.Row(c.Key(label)).Gap(4).AlignItems(ui.Center).Children(func() {
+			row := ui.Row(c.Key(label)).Gap(4).AlignItems(ui.Center)
+			if click != nil {
+				row.Cursor(ui.CursorPointer).Label(label).OnClick(click)
+			}
+			row.Children(func() {
 				ui.Box(c).Size(6, 6).Radius(3).Background(col)
 				ui.Text(c, fmt.Sprintf("%d %s", n, label)).FontSize(11).TextColor(k.muted).SingleLine()
 			})
 		}
-		chip(over, "超期", k.danger)
-		chip(soon, "快到期", k.gold)
-		chip(pend, "待同步", k.gold)
+		chip(over, "超期", k.danger, a.openDueRotate)
+		chip(soon, "快到期", k.gold, a.openDueRotate)
+		chip(pend, "待同步", k.gold, func() { a.setFilter(filterDue) })
 		if over+soon+pend == 0 && len(a.inv.Keys) > 0 {
-			chip(len(a.inv.Keys), "个都正常", k.green)
+			chip(len(a.inv.Keys), "个都正常", k.green, nil)
 		}
 		iconButton(c.Key("add"), k, iconPlus, "添加密钥  "+hk("⌘N"), a.openAdd)
 		iconButton(c.Key("import"), k, iconImport, "导入 .env  "+hk("⌘I"), a.openImport)
@@ -344,7 +348,7 @@ func (a *app) listPane(c *ui.Context, k ink) {
 		a.row(c.Key(rows[i].Name), k, i, rows[i])
 	}).Grow(1).MinHeight(0).Padding(6, 8).Gap(2).Label("密钥列表").Children(func() {
 		if len(rows) == 0 {
-			msg := "还没有密钥。" + hk("⌘I") + " 导入项目里的 .env，或 " + hk("⌘N") + " 添加一个。"
+			msg := "还没有 API key。" + hk("⌘N") + " 添加一个，或 " + hk("⌘I") + " 从 .env 导入。"
 			switch {
 			case len(a.inv.Keys) > 0 && a.query != "":
 				msg = "没有匹配「" + a.query + "」的密钥。"
@@ -504,13 +508,20 @@ func (a *app) detailPane(c *ui.Context, k ink, key vault.Key) {
 				stateLine(c, k, text, col)
 				ui.Spacer(c)
 				smallButton(c.Key("copy"), k, "复制值", "⌘C", k.muted, func() { a.copyValue(key.Name) })
-				smallButton(c.Key("rotate"), k, "轮换", "⌘R", k.link, func() { a.openRotate(key.Name) })
+				rotLabel := "轮换"
+				if st.State == vault.Overdue || st.State == vault.DueSoon || st.Pending > 0 {
+					rotLabel = "自动轮换"
+				}
+				smallButton(c.Key("rotate"), k, rotLabel, "⌘R", k.link, func() { a.openRotate(key.Name) })
 			})
 			if key.Description != "" {
 				ui.Text(c, key.Description).FontSize(13).TextColor(k.muted).LineHeight(1.4)
 			}
 		})
 		a.factsGrid(c.Key("facts"), k, key, st)
+		if open {
+			a.metaEditBlock(c.Key("meta"), k)
+		}
 		a.platformsBlock(c.Key("plats"), k, key, open)
 		allow := key.Agent != "deny"
 		ui.Row(c.Key("agent")).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -553,8 +564,7 @@ func (a *app) detailPane(c *ui.Context, k ink, key vault.Key) {
 	})
 }
 
-// factsGrid is the key's dates and labels, two columns, as LB Bar's
-// stats.
+// factsGrid is the key's dates and labels, two columns — plain rows, no card.
 func (a *app) factsGrid(c *ui.Context, k ink, key vault.Key, st vault.Status) {
 	now := a.now()
 	next := "不提醒"
@@ -585,9 +595,9 @@ func (a *app) factsGrid(c *ui.Context, k ink, key vault.Key, st vault.Status) {
 		{"使用者", orDash(key.Projects)}, {"标签", orDash(key.Tags)},
 		{"创建", day(key.Created)}, {"AI 代理", agent},
 	}
-	ui.Column(c).Gap(0).Radius(8).BorderWidth(1).BorderColor(k.line).Children(func() {
+	ui.Column(c).Gap(2).Children(func() {
 		for i := 0; i < len(cells); i += 2 {
-			ui.Row(c.Key(i)).Padding(6, 12).Gap(16).Children(func() {
+			ui.Row(c.Key(i)).Padding(3, 0).Gap(16).Children(func() {
 				for _, cell := range cells[i : i+2] {
 					ui.Row(c.Key(cell[0])).Grow(1).Basis(0).Gap(8).Children(func() {
 						ui.Text(c, cell[0]).FontSize(12).TextColor(k.muted).Grow(1).SingleLine()
@@ -600,6 +610,52 @@ func (a *app) factsGrid(c *ui.Context, k ink, key vault.Key, st vault.Status) {
 				}
 			})
 		}
+	})
+}
+
+// metaEditBlock lets the open detail change description / rotate / expiry /
+// projects / tags — the fields the add form no longer asks.
+func (a *app) metaEditBlock(c *ui.Context, k ink) {
+	m := &a.meta
+	if m.name == "" {
+		return
+	}
+	block(c, k, "更多", "说明、轮换周期、过期、使用者和标签", func() {
+		fieldIn := func(key, label, ph string, v *string) {
+			ui.Column(c.Key(key)).Gap(4).Margin(0, 0, 6, 0).Children(func() {
+				ui.Text(c, label).FontSize(12).TextColor(k.muted)
+				in := ui.TextInput(c.Key("in"), v).Label(label).Placeholder(ph)
+				if in.Focused() {
+					a.typing = true
+				}
+				if in.Submitted() {
+					a.saveMeta()
+				}
+			})
+		}
+		fieldIn("desc", "说明", "例如：OpenAI 个人账号", &m.desc)
+		ui.Row(c.Key("nums")).Gap(12).Children(func() {
+			ui.Column(c.Key("d")).Grow(1).Basis(0).Children(func() {
+				fieldIn("days", "轮换周期（天）", fmt.Sprintf("默认 %d，-1 不提醒", vault.DefaultRotateDays), &m.days)
+			})
+			ui.Column(c.Key("e")).Grow(1).Basis(0).Children(func() {
+				fieldIn("exp", "过期日", "2027-01-19", &m.expires)
+			})
+		})
+		ui.Row(c.Key("who")).Gap(12).Children(func() {
+			ui.Column(c.Key("p")).Grow(1).Basis(0).Children(func() {
+				fieldIn("projects", "使用者", "rz-system, lb-bar", &m.projects)
+			})
+			ui.Column(c.Key("t")).Grow(1).Basis(0).Children(func() {
+				fieldIn("tags", "标签", "prod, ai", &m.tags)
+			})
+		})
+		if m.err != "" {
+			ui.Text(c.Key("err"), m.err).FontSize(12).TextColor(k.danger)
+		}
+		ui.Row(c.Key("save")).Children(func() {
+			linkButton(c.Key("btn"), k, "保存元数据", k.link, a.saveMeta)
+		})
 	})
 }
 
@@ -798,14 +854,13 @@ func (a *app) formView(c *ui.Context, k ink) {
 				}
 			})
 		}
-		half := func(key string, fn func()) { ui.Column(c.Key(key)).Grow(1).Basis(0).Children(fn) }
 		pageBody(c, "form", 14, func() {
 			if f.rotate {
 				key, _ := a.key(f.name)
-				ui.Text(c, "先在服务商那里生成新密钥，再粘贴到这里。保存后钥匙串里的旧值即被替换。").FontSize(12).TextColor(k.muted).LineHeight(1.45)
+				ui.Text(c, "在服务商那里生成新密钥，粘贴到这里。保存后钥匙串更新；GitHub Actions / Vercel 会自动推送，其它平台进清单。").FontSize(12).TextColor(k.muted).LineHeight(1.45)
 				input("v1", "新值", "粘贴新密钥", &f.value, true, true)
 				input("v2", "再输入一次", "", &f.value2, true, false)
-				input("note", "备注（可选）", "例如：Railway 安全通告后轮换", &f.note, false, false)
+				input("note", "备注（可选）", "例如：泄露通报后轮换", &f.note, false, false)
 				if len(key.Platforms) > 0 {
 					block(c, k, "保存后", "", func() {
 						for _, p := range key.Platforms {
@@ -821,25 +876,10 @@ func (a *app) formView(c *ui.Context, k ink) {
 					})
 				}
 			} else {
+				ui.Text(c, "名称和值就够了。平台、轮换周期这些，以后在详情里补。").FontSize(12).TextColor(k.muted).LineHeight(1.45)
 				input("name", "名称", "OPENAI_API_KEY", &f.name, false, true)
 				input("value", "值", "只存进"+storeShort(), &f.value, true, false)
-				input("desc", "说明", "例如：OpenAI 个人账号，用于 rz-system", &f.desc, false, false)
-				ui.Column(c.Key("plats")).Gap(5).Children(func() {
-					ui.Text(c, "也存在于（每行一个 kind:target）").FontSize(12).TextColor(k.muted)
-					ui.TextArea(c.Key("in"), &f.platforms).Label("也存在于").Placeholder("github:horizon0514/lb-bar\nvercel:gaotie-xiaosiji\nrailway:api").Height(72)
-				})
-				ui.Row(c.Key("nums")).Gap(12).Children(func() {
-					half("d", func() {
-						input("days", "轮换周期（天）", fmt.Sprintf("默认 %d", vault.DefaultRotateDays), &f.days, false, false)
-					})
-					half("e", func() { input("exp", "过期日（可选）", "2027-01-19", &f.expires, false, false) })
-				})
-				ui.Row(c.Key("meta")).Gap(12).Children(func() {
-					half("p", func() {
-						input("projects", "使用者（逗号分隔）", "rz-system, lb-bar", &f.projects, false, false)
-					})
-					half("t", func() { input("tags", "标签", "prod, ai", &f.tags, false, false) })
-				})
+				input("desc", "说明（可选）", "例如：OpenAI 个人账号", &f.desc, false, false)
 			}
 			if f.err != "" {
 				ui.Text(c.Key("err"), f.err).FontSize(12).TextColor(k.danger).LineHeight(1.4)

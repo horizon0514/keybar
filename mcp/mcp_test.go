@@ -268,8 +268,11 @@ func TestRunDetectsProjectKeys(t *testing.T) {
 	if !strings.Contains(out, "a=[REDACTED:OPENAI_API_KEY] b=[REDACTED:TIDB_URL] v=none") {
 		t.Errorf("%s", out)
 	}
-	if !strings.Contains(out, "injected: OPENAI_API_KEY, TIDB_URL") || !strings.Contains(out, "skipped: PORT") || !strings.Contains(out, "does not let agents use them): VERCEL_TOKEN") {
+	if !strings.Contains(out, "injected: OPENAI_API_KEY, TIDB_URL") || !strings.Contains(out, "does not let agents use them): VERCEL_TOKEN") {
 		t.Errorf("notes: %s", out)
+	}
+	if strings.Contains(out, "PORT") {
+		t.Errorf("PORT should not appear: %s", out)
 	}
 	if len(g.asked) != 1 || strings.Join(g.asked[0].Keys, ",") != "OPENAI_API_KEY,TIDB_URL" {
 		t.Errorf("asked %+v", g.asked)

@@ -73,12 +73,19 @@ type importing struct {
 	typing bool // the new name's field has the focus
 }
 
-// form is the add or rotate form.
+// form is the add or rotate form: add asks name + value (+ optional
+// description); rotate asks the new value (+ confirm) and an optional note.
+// Platforms, rotate days, expiry, projects and tags live on the detail page.
 type form struct {
-	rotate                                   bool // rotating name, else adding a key
-	name, value, value2, desc, note          string
-	platforms, days, expires, projects, tags string
-	err                                      string
+	rotate                          bool // rotating name, else adding a key
+	name, value, value2, desc, note string
+	err                             string
+}
+
+// metaEdit is the detail page's editable fields for a key (not its value).
+type metaEdit struct {
+	name, desc, days, expires, projects, tags string
+	err                                        string
 }
 
 // app is the panel's state and what it does; the shell (gui.go) gives it
@@ -104,6 +111,7 @@ type app struct {
 	confirm bool // the delete dialog
 
 	form    form
+	meta    metaEdit
 	addPlat string
 	syncing map[string]bool   // key/platform IDs being updated
 	syncMsg map[string]string // and the last result
@@ -285,15 +293,37 @@ func (a *app) say(msg string) {
 
 func (a *app) openDetail(name string) {
 	a.reload()
-	if _, ok := a.key(name); !ok {
+	k, ok := a.key(name)
+	if !ok {
 		return
 	}
 	a.detail, a.page, a.addPlat, a.confirm = name, pageDetail, "", false
-	for i, k := range a.rows() { // the list shows it chosen
-		if k.Name == name {
+	a.loadMeta(k)
+	for i, row := range a.rows() { // the list shows it chosen
+		if row.Name == name {
 			a.chosen = i
 			a.list.ScrollIntoView(i)
 		}
+	}
+}
+
+func (a *app) loadMeta(k vault.Key) {
+	days := ""
+	switch k.RotateDays {
+	case 0:
+		days = ""
+	case -1:
+		days = "-1"
+	default:
+		days = strconv.Itoa(k.RotateDays)
+	}
+	exp := ""
+	if !k.Expires.IsZero() {
+		exp = k.Expires.Local().Format(time.DateOnly)
+	}
+	a.meta = metaEdit{
+		name: k.Name, desc: k.Description, days: days, expires: exp,
+		projects: strings.Join(k.Projects, ", "), tags: strings.Join(k.Tags, ", "),
 	}
 }
 
@@ -321,6 +351,7 @@ func (a *app) back() {
 		return
 	}
 	a.form = form{}
+	a.meta = metaEdit{}
 	a.focusInput = a.page == pageList
 }
 
@@ -333,7 +364,7 @@ func (a *app) shown() {
 }
 
 func (a *app) openAdd() {
-	a.form = form{days: ""}
+	a.form = form{}
 	a.page = pageForm
 }
 
@@ -344,6 +375,37 @@ func (a *app) openRotate(name string) {
 	a.form = form{rotate: true, name: name}
 	a.detail = name
 	a.page = pageForm
+}
+
+// dueNames are keys overdue or due within the remind window, overdue first.
+func (a *app) dueNames() (over, soon []string) {
+	now := a.now()
+	horizon := now.Add(time.Duration(a.settings.RemindDays) * 24 * time.Hour)
+	for _, k := range a.inv.Keys {
+		st := a.inv.StatusOf(k, now)
+		switch {
+		case st.State == vault.Overdue:
+			over = append(over, k.Name)
+		case !st.Due.IsZero() && st.Due.Before(horizon), !st.Expires.IsZero() && st.Expires.Before(horizon):
+			soon = append(soon, k.Name)
+		}
+	}
+	return over, soon
+}
+
+// openDueRotate opens the rotate form for the first overdue key, else the
+// first due-soon one: the continuous path from a reminder.
+func (a *app) openDueRotate() {
+	over, soon := a.dueNames()
+	switch {
+	case len(over) > 0:
+		a.openRotate(over[0])
+	case len(soon) > 0:
+		a.openRotate(soon[0])
+	default:
+		a.setFilter(filterDue)
+		a.page = pageList
+	}
 }
 
 func (a *app) openLog()      { a.page = pageLog }
@@ -417,34 +479,7 @@ func (a *app) submit() {
 		f.err = "请输入值"
 		return
 	}
-	k := vault.Key{Name: name, Description: strings.TrimSpace(f.desc), Tags: splitList(f.tags), Projects: splitList(f.projects)}
-	if s := strings.TrimSpace(f.days); s != "" {
-		n, err := strconv.Atoi(s)
-		if err != nil || n == 0 {
-			f.err = "轮换周期要一个天数，-1 表示不提醒"
-			return
-		}
-		k.RotateDays = n
-	}
-	if s := strings.TrimSpace(f.expires); s != "" {
-		t, err := time.ParseInLocation(time.DateOnly, s, time.Local)
-		if err != nil {
-			f.err = "过期日格式是 2027-01-19"
-			return
-		}
-		k.Expires = t
-	}
-	for _, line := range strings.Split(f.platforms, "\n") {
-		if line = strings.TrimSpace(line); line == "" {
-			continue
-		}
-		p, err := vault.ParsePlatform(line)
-		if err != nil {
-			f.err = err.Error()
-			return
-		}
-		k.Platforms = append(k.Platforms, p)
-	}
+	k := vault.Key{Name: name, Description: strings.TrimSpace(f.desc)}
 	if err := a.v.Add(k, []byte(f.value)); err != nil {
 		f.err = err.Error()
 		return
@@ -459,6 +494,51 @@ func (a *app) submit() {
 
 func splitList(s string) []string {
 	return vault.Clean(strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '，' || r == '\n' }))
+}
+
+// saveMeta writes the detail page's editable fields.
+func (a *app) saveMeta() {
+	m := &a.meta
+	m.err = ""
+	if m.name == "" {
+		return
+	}
+	var days int
+	if s := strings.TrimSpace(m.days); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n == 0 {
+			m.err = "轮换周期要一个天数，-1 表示不提醒"
+			return
+		}
+		days = n
+	}
+	var exp time.Time
+	if s := strings.TrimSpace(m.expires); s != "" {
+		t, err := time.ParseInLocation(time.DateOnly, s, time.Local)
+		if err != nil {
+			m.err = "过期日格式是 2027-01-19"
+			return
+		}
+		exp = t
+	}
+	err := a.v.Edit(m.name, func(k *vault.Key) error {
+		k.Description = strings.TrimSpace(m.desc)
+		k.RotateDays = days
+		k.Expires = exp
+		k.Projects = splitList(m.projects)
+		k.Tags = splitList(m.tags)
+		return nil
+	})
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	a.reload()
+	if k, ok := a.key(m.name); ok {
+		a.loadMeta(k)
+	}
+	a.say("已保存 " + m.name)
+	a.trayChanged()
 }
 
 // syncPlatform updates an automatic platform with the value, in the
@@ -653,18 +733,7 @@ func (a *app) remind() {
 		return
 	}
 	a.reload()
-	now := a.now()
-	var over, soon []string
-	horizon := now.Add(time.Duration(a.settings.RemindDays) * 24 * time.Hour)
-	for _, k := range a.inv.Keys {
-		st := a.inv.StatusOf(k, now)
-		switch {
-		case st.State == vault.Overdue:
-			over = append(over, k.Name)
-		case !st.Due.IsZero() && st.Due.Before(horizon), !st.Expires.IsZero() && st.Expires.Before(horizon):
-			soon = append(soon, k.Name)
-		}
-	}
+	over, soon := a.dueNames()
 	if len(over)+len(soon) == 0 {
 		return
 	}

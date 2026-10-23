@@ -51,8 +51,7 @@ func TestLikely(t *testing.T) {
 		{"MY_SERVICE_TOKEN", "dummy-token-value"},
 		{"DB_PASSWORD", "hunter2-dummy"},
 		{"DATABASE_URL", "postgres://app:dummy-pass@localhost:5432/app"},
-		{"WHATEVER", "Zq8LmW2pT7vXc4Rn9KjH5sYd3FgB6tQe"}, // random-looking value under any name
-		{"SENTRY_DSN", "https://abc123@o1.ingest.sentry.io/1"},
+		{"SENTRY_DSN", "https://abc123:secret@o1.ingest.sentry.io/1"},
 	}
 	for _, c := range yes {
 		if !Likely(c[0], c[1]) {
@@ -65,6 +64,8 @@ func TestLikely(t *testing.T) {
 		{"APP_URL", "https://example.com/some/long/path/abc123"}, {"NEXT_PUBLIC_API_KEY", "pk-" + fill(30)},
 		{"STRIPE_PUBLISHABLE_KEY", "pk_test_" + fill(24)}, {"LOG_LEVEL", "info"}, {"API_KEY", ""}, {"ENABLE_KEY_ROTATION", "false"},
 		{"AWS_REGION", "us-east-1"}, {"HOST", "0.0.0.0"},
+		{"WHATEVER", "Zq8LmW2pT7vXc4Rn9KjH5sYd3FgB6tQe"}, // random alone is not enough
+		{"FEATURE_FLAG", "Zq8LmW2pT7vXc4Rn9KjH5sYd3FgB6tQe"},
 	}
 	for _, c := range no {
 		if Likely(c[0], c[1]) {
@@ -94,8 +95,8 @@ func TestMask(t *testing.T) {
 }
 
 func TestFillable(t *testing.T) {
-	got := Fillable([]string{"PORT", "OPENAI_API_KEY", "NODE_ENV", "DATABASE_URL", "OPENAI_API_KEY", "SKIPPED"}, []string{"SKIPPED"})
-	if strings.Join(got, ",") != "OPENAI_API_KEY,DATABASE_URL" {
-		t.Error(got)
+	got := Fillable([]string{"PORT", "OPENAI_API_KEY", "NODE_ENV", "DATABASE_URL", "OPENAI_API_KEY", "SKIPPED", "MY_TOKEN"}, []string{"SKIPPED"})
+	if strings.Join(got, ",") != "OPENAI_API_KEY,MY_TOKEN" {
+		t.Error(got) // DATABASE_URL: name is not *KEY*/*TOKEN*/*SECRET*…
 	}
 }

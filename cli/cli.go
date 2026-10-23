@@ -136,7 +136,7 @@ const usage = `keys — KeyBar 的命令行：密钥只存在系统钥匙串里�
   keys sync NAME [ID]         重试自动更新
   keys audit [-n 50] [--key NAME]  访问记录
   keys doctor [目录...]        检查超期 / 快到期的密钥、未完成的清单、明文 .env
-  keys config [名 值]          设置：rotate-days、remind、remind-days、grant-minutes、cli-approval
+  keys config [名 值]          设置：rotate-days、remind、remind-days、grant-minutes、cli-approval、clipboard、watch-env
   keys mcp [--client 名]      MCP 服务（stdio），keys connect 会替你配好
 
 add / edit 的选项：
@@ -1371,6 +1371,8 @@ func config(e *Env, args []string) (int, error) {
 		fmt.Fprintf(e.Stdout, "remind-days    %d    提前几天提醒\n", s.RemindDays)
 		fmt.Fprintf(e.Stdout, "grant-minutes  %d    「限时允许」的分钟数\n", s.GrantMinutes)
 		fmt.Fprintf(e.Stdout, "cli-approval   %v    非交互的 keys get / run 也要批准\n", onOff(s.CLIApproval))
+		fmt.Fprintf(e.Stdout, "clipboard      %v    检测复制的 key（默认 off）\n", onOff(s.Clipboard))
+		fmt.Fprintf(e.Stdout, "watch-env      %v    提醒新的 .env（默认 off）\n", onOff(s.WatchEnv))
 		fmt.Fprintf(e.Stdout, "数据目录：%s\n", shortPath(dir))
 		return 0, nil
 	}
@@ -1414,6 +1416,10 @@ func config(e *Env, args []string) (int, error) {
 			return 1, errors.New("cli-approval 只能在终端里或 KeyBar 设置里修改")
 		}
 		s.CLIApproval = val == "on" || val == "true" || val == "1"
+	case "clipboard":
+		s.Clipboard = val == "on" || val == "true" || val == "1"
+	case "watch-env":
+		s.WatchEnv = val == "on" || val == "true" || val == "1"
 	default:
 		return 2, usageError("没有设置 " + name)
 	}

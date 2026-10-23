@@ -137,7 +137,9 @@ func (s *shell) ready() {
 		}()
 	}
 	a.winDrag = s.drag
-	mygo.App.OnNotificationClick(func(string) { s.panel.Update(s.show) })
+	mygo.App.OnNotificationClick(func(string) {
+		s.panel.Update(func() { a.openDueRotate(); s.show() })
+	})
 
 	if err := s.setShortcut(a.settings.Shortcut); err != nil {
 		log.Printf("shortcut %s: %v", a.settings.Shortcut, err)
@@ -314,6 +316,12 @@ func (s *shell) trayChanged() {
 	for _, n := range a.auto.envNotes {
 		path := n.path
 		items = append(items, &mygo.MenuItem{Label: fmt.Sprintf("%s 有 %d 个新 key · 导入…", envLabel(path), n.n), Click: func(*mygo.MenuItem, *mygo.Window) { a.openScan(path); s.show() }})
+	}
+	over, soon := a.dueNames()
+	for _, name := range append(append([]string{}, over...), soon...) {
+		n := name
+		label := "自动轮换 " + n + "…"
+		items = append(items, &mygo.MenuItem{Label: label, Click: func(*mygo.MenuItem, *mygo.Window) { a.openRotate(n); s.show() }})
 	}
 	items = append(items, mygo.Separator(),
 		&mygo.MenuItem{Label: "打开 KeyBar", Accelerator: s.shortcut, Click: func(*mygo.MenuItem, *mygo.Window) { a.page = pageList; s.show() }},

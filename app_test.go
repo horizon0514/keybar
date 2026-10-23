@@ -164,20 +164,64 @@ func TestAdd(t *testing.T) {
 	if h.page != pageForm || h.form.rotate {
 		t.Fatal("⌘N")
 	}
-	h.form = form{name: "NEW_KEY", value: "dummy-new-0000", desc: "test", platforms: "github:o/r\nrailway:api", days: "30", projects: "a, b"}
+	h.form = form{name: "NEW_KEY", value: "dummy-new-0000", desc: "test"}
 	h.submit()
 	if h.form.err != "" {
 		t.Fatal(h.form.err)
 	}
 	k, ok := h.key("NEW_KEY")
-	if !ok || len(k.Platforms) != 2 || k.RotateDays != 30 || len(k.Projects) != 2 || h.page != pageDetail {
+	if !ok || k.Description != "test" || len(k.Platforms) != 0 || h.page != pageDetail {
 		t.Errorf("%+v", k)
+	}
+	// metadata lives on the detail page
+	h.meta.days, h.meta.projects, h.meta.tags = "30", "a, b", "ai"
+	h.addPlat = "github:o/r"
+	h.addPlatform("NEW_KEY")
+	h.addPlat = "railway:api"
+	h.addPlatform("NEW_KEY")
+	h.saveMeta()
+	k, _ = h.key("NEW_KEY")
+	if k.RotateDays != 30 || len(k.Projects) != 2 || len(k.Platforms) != 2 {
+		t.Errorf("meta %+v", k)
 	}
 	h.openAdd()
 	h.form = form{name: "bad name", value: "x"}
 	h.submit()
 	if h.form.err == "" {
 		t.Error("bad name accepted")
+	}
+}
+
+func TestOpenDueRotate(t *testing.T) {
+	h := newHarness(t)
+	// TIDB_PROD_URL is overdue in the demo seed
+	h.openDueRotate()
+	if h.page != pageForm || !h.form.rotate || h.form.name != "TIDB_PROD_URL" {
+		t.Fatalf("page=%v rotate=%v name=%q", h.page, h.form.rotate, h.form.name)
+	}
+	tt := h.tester(panelWidth)
+	tt.Frame()
+	if !tt.HasText("自动推送") && !tt.HasText("粘贴") {
+		// form copy mentions paste / auto push
+		if !tt.HasText("新值") {
+			t.Errorf("%q", tt.Texts())
+		}
+	}
+}
+
+func TestSaveMeta(t *testing.T) {
+	h := newHarness(t)
+	h.openDetail("OPENAI_API_KEY")
+	h.meta.desc = "updated desc"
+	h.meta.days = "60"
+	h.meta.tags = "ai, personal"
+	h.saveMeta()
+	if h.meta.err != "" {
+		t.Fatal(h.meta.err)
+	}
+	k, _ := h.key("OPENAI_API_KEY")
+	if k.Description != "updated desc" || k.RotateDays != 60 || len(k.Tags) != 2 {
+		t.Errorf("%+v", k)
 	}
 }
 

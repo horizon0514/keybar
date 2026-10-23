@@ -27,6 +27,9 @@ export GNOME_KEYRING_CONTROL
 ln -s "$bin" "$HOME/bin/keys"
 export PATH="$HOME/bin:$PATH"
 cd "$HOME"
+# clipboard detection defaults off; turn it on so the e2e can exercise it
+mkdir -p "$KEYBAR_DIR"
+printf '%s\n' '{"remind":true,"remindDays":14,"grantMinutes":15,"cliApproval":true,"clipboard":true}' >"$KEYBAR_DIR/settings.json"
 
 pass=0; fail=0
 ok()   { echo "  ✓ $*"; pass=$((pass+1)); }
@@ -97,7 +100,8 @@ grep -qF 'E2E_TOKEN = "E2E_TOKEN_E2E_APP"' "$proj/keys.toml" && ok "改名记在
 approve Return auto-run &
 out=$(cd "$proj/src" && timeout 30 keys run --redact -- sh -c 'echo t:$E2E_TOKEN n:$E2E_NEW p:${PORT:-unset}' </dev/null 2>&1 || true); wait $! || true
 has "$out" "t:[REDACTED:E2E_TOKEN_E2E_APP] n:[REDACTED:E2E_NEW] p:unset" "keys run 自动注入（不写配置；改名的按 keys.toml）"
-has "$out" "KeyBar 里没有 PORT，跳过" "keys run：缺的变量跳过并提示"
+hasnt "$out" "PORT" "keys run：PORT 不提示、不注入（不是密钥名）"
+has "$out" "p:unset" "keys run：PORT 未注入"
 
 echo "连接 AI 代理"
 unset DSH_HOME CODEX_HOME

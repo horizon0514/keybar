@@ -1,9 +1,9 @@
-// KeyBar keeps API keys in the system's keychain, not in .env files: a
-// menu bar app that lists them with where else each is stored and when it
-// was last rotated, reminds of rotations, and approves agents' requests;
-// and its command line, keys, which runs programs with the keys they need
-// and serves agents over MCP. One program: run as keys (or with a
-// command), it is the command line.
+// KeyBar is a lightweight keychain for a few API keys: values live in the
+// system keychain, the menu bar lists them for search / copy / rotate, and
+// reminds you when rotation is due (with one-tap rotate that pushes to
+// GitHub Actions and Vercel when it can). The command line keys and an
+// optional MCP server are still there for people who want them. One
+// program: run as keys (or with a command), it is the command line.
 package main
 
 import (
@@ -24,7 +24,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-const version = "0.2.1"
+const version = "0.3.0"
 
 // cliCommands are the arguments that make the app its command line.
 var cliCommands = []string{"help", "-h", "--help", "version", "add", "set", "get", "ls", "list", "show", "rm", "edit", "run",
