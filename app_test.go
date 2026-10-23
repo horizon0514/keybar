@@ -115,7 +115,9 @@ func TestDetailAndRotate(t *testing.T) {
 	h := newHarness(t)
 	tt := h.tester(panelWidth)
 	h.choose(indexOf(h.rows(), "RAILWAY_TOKEN"))
-	tt.Key(0, ui.KeyEnter)
+	// Enter now copies; open the detail explicitly.
+	h.openDetail("RAILWAY_TOKEN")
+	tt.Frame()
 	if h.page != pageDetail || h.detail != "RAILWAY_TOKEN" {
 		t.Fatalf("page %v %s", h.page, h.detail)
 	}
@@ -490,7 +492,8 @@ func TestContrast(t *testing.T) {
 func TestFilters(t *testing.T) {
 	h := newHarness(t)
 	tt := h.tester(panelWidth)
-	tt.Key(ui.Cmd, ui.Key2)
+	// Filter tabs and shortcuts were removed from the main list; set the filter directly.
+	h.setFilter(filterDue)
 	if h.filter != filterDue {
 		t.Fatalf("⌘2: filter %d", h.filter)
 	}
@@ -509,7 +512,7 @@ func TestFilters(t *testing.T) {
 		}
 	}
 	tt.Frame()
-	tt.Key(ui.Cmd, ui.Key1)
+	h.setFilter(filterAll)
 	if h.filter != filterAll || len(h.rows()) != len(h.inv.Keys) {
 		t.Errorf("⌘1: filter %d, %d rows", h.filter, len(h.rows()))
 	}
@@ -580,9 +583,10 @@ func TestConnectAgentsUI(t *testing.T) {
 func TestImportUI(t *testing.T) {
 	h := newHarness(t)
 	tt := h.tester(panelWidth)
-	tt.Key(ui.Cmd, ui.KeyI)
+	h.openImport()
+	tt.Frame()
 	if h.page != pageImport {
-		t.Fatal("⌘I")
+		t.Fatal("openImport")
 	}
 	path := demoEnvFile()
 	defer os.RemoveAll(filepath.Dir(filepath.Dir(path)))
