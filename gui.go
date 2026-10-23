@@ -79,8 +79,11 @@ func (s *shell) ready() {
 		a.settings.Shortcut = defaultShortcut
 	}
 	s.a = a
+	// Use a standard, titled window (with traffic lights) instead of a borderless panel.
+	// Keep LSUIElement (menubar-only) so there is no Dock icon; closing hides the window.
 	s.panel = mygo.NewWindow(mygo.WindowOptions{
-		Title: "KeyBar", Panel: true, Hidden: true, Frameless: true, Transparent: true,
+		Title: "KeyBar",
+		Panel: false, Hidden: true, Frameless: false, Transparent: false,
 		Width: panelWidth, Height: panelHeight, MinWidth: minWidth, MinHeight: minHeight,
 		Content: ui.View(a.view),
 	})
@@ -91,11 +94,7 @@ func (s *shell) ready() {
 		}
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { s.quitting = true })
-	s.panel.OnBlur(func() {
-		if len(a.pending) == 0 && !s.picking { // a request stays until answered
-			s.panel.Hide()
-		}
-	})
+	// Do not auto-hide on blur: standard app window behavior.
 	a.post = func(fn func()) { s.panel.Update(fn) }
 	a.spawn = func(fn func()) { go fn() }
 	a.later = func(d time.Duration, fn func()) { time.AfterFunc(d, func() { s.panel.Update(fn) }) }
@@ -136,7 +135,8 @@ func (s *shell) ready() {
 			})
 		}()
 	}
-	a.winDrag = s.drag
+	// Disable custom drag handling; standard windows are moved by the title bar.
+	a.winDrag = nil
 	mygo.App.OnNotificationClick(func(string) {
 		s.panel.Update(func() { a.openDueRotate(); s.show() })
 	})

@@ -136,30 +136,17 @@ func (a *app) keysList(c *ui.Context) {
 	case c.Shortcut(0, ui.KeyUp):
 		a.choose(a.chosen - 1)
 	case c.Shortcut(0, ui.KeyEnter):
+		// Enter copies the value — the main path is search → list → copy.
 		if k, ok := a.chosenKey(); ok {
-			a.openDetail(k.Name)
+			a.copyValue(k.Name)
 		}
-	case c.Shortcut(ui.Cmd, ui.Key1):
-		a.setFilter(filterAll)
-	case c.Shortcut(ui.Cmd, ui.Key2):
-		a.setFilter(filterDue)
-	case c.Shortcut(ui.Cmd, ui.Key3):
-		a.setFilter(filterDenied)
 	case c.Shortcut(ui.Cmd, ui.KeyN):
 		a.openAdd()
-	case c.Shortcut(ui.Cmd, ui.KeyI):
-		a.openImport()
-	case c.Shortcut(ui.Cmd, ui.KeyR):
-		if k, ok := a.chosenKey(); ok {
-			a.openRotate(k.Name)
-		}
-	case c.Shortcut(ui.Cmd, ui.KeyY):
-		a.openLog()
 	case c.Shortcut(ui.Cmd, ui.KeyC):
 		if k, ok := a.chosenKey(); ok {
 			a.copyValue(k.Name)
 		}
-	case c.Shortcut(ui.Cmd, ui.KeyF), c.Shortcut(ui.Cmd, ui.KeyL):
+	case c.Shortcut(ui.Cmd, ui.KeyF):
 		a.input.Focus()
 	}
 }
@@ -200,7 +187,7 @@ func (a *app) mainView(c *ui.Context, k ink) {
 	wide := w == 0 || w >= splitWidth
 	ui.Column(c).Fill().Children(func() {
 		a.header(c, k)
-		a.tabs(c, k)
+		// No filter tabs on the main list; simplify path to search → list → copy.
 		ui.Divider(c)
 		a.autoNotices(c, k)
 		ui.Row(c.Key("panes")).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
@@ -240,7 +227,7 @@ func (a *app) mainView(c *ui.Context, k ink) {
 		if a.page == pageDetail {
 			a.hintBar(c, k, left, hint("⌘R", "轮换", "⌘C", "复制值", "⌘⌫", "删除", "esc", "返回列表"))
 		} else {
-			a.hintBar(c, k, left, hint("↑↓", "选择", "↵", "详情", "⌘N", "添加", "⌘I", "导入", "⌘1–3", "筛选", "⌘/", "快捷键"))
+			a.hintBar(c, k, left, hint("↑↓", "选择", "↵", "复制", "⌘C", "复制", "⌘N", "添加", "⌘/", "快捷键"))
 		}
 	})
 	if open && a.page == pageDetail {
@@ -273,7 +260,7 @@ func (a *app) header(c *ui.Context, k ink) {
 		}
 		if in.Submitted() {
 			if key, ok := a.chosenKey(); ok {
-				a.openDetail(key.Name)
+				a.copyValue(key.Name)
 			}
 		}
 		if a.focusInput {
@@ -305,9 +292,9 @@ func (a *app) header(c *ui.Context, k ink) {
 			chip(len(a.inv.Keys), "个都正常", k.green, nil)
 		}
 		iconButton(c.Key("add"), k, iconPlus, "添加密钥  "+hk("⌘N"), a.openAdd)
-		iconButton(c.Key("import"), k, iconImport, "导入 .env  "+hk("⌘I"), a.openImport)
-		iconButton(c.Key("log"), k, iconLog, "访问记录  "+hk("⌘Y"), a.openLog)
-		iconButton(c.Key("gear"), k, iconGear, "设置  "+hk("⌘,"), a.openSettings)
+		iconButton(c.Key("import"), k, iconImport, "导入 .env", a.openImport)
+		iconButton(c.Key("log"), k, iconLog, "访问记录", a.openLog)
+		iconButton(c.Key("gear"), k, iconGear, "更多…", func() { a.openSettings() })
 	})
 }
 
@@ -348,14 +335,7 @@ func (a *app) listPane(c *ui.Context, k ink) {
 		a.row(c.Key(rows[i].Name), k, i, rows[i])
 	}).Grow(1).MinHeight(0).Padding(6, 8).Gap(2).Label("密钥列表").Children(func() {
 		if len(rows) == 0 {
-			msg := "还没有 API key。" + hk("⌘N") + " 添加一个，或 " + hk("⌘I") + " 从 .env 导入。"
-			switch {
-			case len(a.inv.Keys) > 0 && a.query != "":
-				msg = "没有匹配「" + a.query + "」的密钥。"
-			case len(a.inv.Keys) > 0:
-				msg = "这一栏没有密钥。"
-			}
-			notice(c, k, msg, false)
+			notice(c, k, hk("⌘N")+" 加一把钥匙", false)
 		}
 	})
 }
@@ -374,46 +354,12 @@ func (a *app) row(c *ui.Context, k ink, i int, key vault.Key) {
 	case row.Hovered():
 		bg = k.hover
 	}
-	row.Background(bg).OnClick(func() {
-		if a.chosen == i {
-			a.openDetail(key.Name)
-		} else {
-			a.choose(i)
-			if a.page == pageDetail {
-				a.openDetail(key.Name)
-			}
-		}
-	})
+	// Click copies the secret; Enter/Cmd+C also copy.
+	row.Background(bg).OnClick(func() { a.choose(i); a.copyValue(key.Name) })
 	row.Children(func() {
-		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
-			ui.Text(c, key.Name).FontSize(13.5).FontWeight(550).SingleLine().Shrink(1)
-			ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-				for _, kind := range kinds(key) {
-					chipTag(c, k, kind)
-				}
-				if key.Agent == "deny" {
-					chipTag(c, k, "代理禁用")
-				}
-				sub := key.Description
-				if sub == "" {
-					sub = vault.Ago(key.LastRotated, now) + "轮换"
-				}
-				ui.Text(c, sub).FontSize(11).TextColor(k.faint).SingleLine().Shrink(1).MinWidth(0)
-			})
-		})
-		ui.Column(c).AlignItems(ui.End).Gap(2).Shrink(0).Children(func() {
-			text, col := "正常", k.green
-			switch {
-			case st.State == vault.Overdue:
-				text, col = st.Why, k.danger
-			case st.State == vault.DueSoon:
-				text, col = st.Why, k.gold
-			case st.Pending > 0:
-				text, col = fmt.Sprintf("%d 处待同步", st.Pending), k.gold
-			}
-			stateLine(c, k, text, col)
-			ui.Text(c, vault.Ago(key.LastRotated, now)+"轮换").FontSize(10).TextColor(k.faint).SingleLine()
-		})
+		// Minimal row: status dot + key name only.
+		ui.Box(c).Size(6, 6).Radius(3).Background(k.state(st.State)).Shrink(0)
+		ui.Text(c, key.Name).FontSize(13.5).FontWeight(550).SingleLine().Shrink(1)
 	})
 }
 
@@ -1354,23 +1300,18 @@ func (a *app) tabAbout(c *ui.Context, k ink) {
 func (a *app) cheatsheet(c *ui.Context, k ink) {
 	rows := [][3]string{
 		{"列表", "直接打字", "搜索名称、说明、平台、项目"},
-		{"", "↑ ↓", "选择（右侧是它的详情）"},
-		{"", "↵", "打开详情：勾选平台、添加平台、删除"},
-		{"", "⌘1 ⌘2 ⌘3", "全部 / 需处理 / 代理禁用"},
+		{"", "↑ ↓", "选择"},
+		{"", "↵  ⌘C", "复制值（30 秒后清除剪贴板）"},
 		{"", "⌘N", "添加密钥"},
-		{"", "⌘I", "导入 .env（同名的逐个决定）"},
-		{"", "⌘R", "轮换选中的密钥"},
-		{"", "⌘C", "复制值（30 秒后清除剪贴板）"},
-		{"", "⌘Y", "访问记录"},
+		{"", "", ""},
 		{"详情", "⌘R  ⌘C", "轮换 / 复制值"},
 		{"", "⌘⌫", "删除"},
 		{"", "esc", "回到列表"},
 		{"批准", "↵", "允许一次"},
 		{"", "⌘↵", fmt.Sprintf("允许 %d 分钟", a.settings.GrantMinutes)},
 		{"", "esc", "拒绝"},
-		{"通用", keysLabel(a.settings.Shortcut), "唤起 / 隐藏面板"},
+		{"通用", keysLabel(a.settings.Shortcut), "唤起 / 隐藏窗口"},
 		{"", "⌘,", "设置"},
-		{"", "拖动顶栏 / 底栏", "移动面板（双击复位）"},
 		{"", "⌘Q", "退出"},
 	}
 	ui.Column(c).Fill().Children(func() {
