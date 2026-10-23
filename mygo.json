@@ -1,7 +1,7 @@
 {
   "name": "KeyBar",
   "identifier": "dev.horizon.keybar",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "copyright": "© 2026 horizon0514 · MIT",
   "out": "build",
   "macos": {
