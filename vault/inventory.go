@@ -89,7 +89,7 @@ func (p Platform) VarName(key string) string {
 }
 
 // Auto tells whether KeyBar can update the platform itself.
-func (p Platform) Auto() bool { return p.Kind == "github" || p.Kind == "vercel" }
+func (p Platform) Auto() bool { return p.Kind == "github" || p.Kind == "vercel" || p.Kind == "env" }
 
 // Stale tells whether the platform still has the value before the last
 // rotation.

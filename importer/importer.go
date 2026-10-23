@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"keybar/project"
@@ -529,4 +530,79 @@ func (p *Plan) Valued() []*Item {
 		}
 	}
 	return out
+}
+
+// AttachEnvPlatforms records the .env file on each imported key so
+// rotation can write the new value back (Kind env, Auto). Shell rc
+// imports must not call this. path is the absolute file; it is stored
+// as ~/… when under the home directory. When the KeyBar name differs
+// from the variable (rename), Platform.Var keeps the file's name.
+func AttachEnvPlatforms(v *vault.Vault, path string, r Result) {
+	if len(r.Env) == 0 || path == "" {
+		return
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return
+	}
+	target := shortPath(abs)
+	now := time.Now()
+	if v.Now != nil {
+		now = v.Now()
+	}
+	seen := map[string]bool{}
+	for envName, keyName := range r.Env {
+		if seen[keyName] {
+			// two vars mapped to one key: keep the first Var; rare
+			continue
+		}
+		seen[keyName] = true
+		_ = v.Edit(keyName, func(k *vault.Key) error {
+			for i := range k.Platforms {
+				p := &k.Platforms[i]
+				if p.Kind != "env" {
+					continue
+				}
+				if !sameEnvTarget(p.Target, abs, target) {
+					continue
+				}
+				if keyName != envName {
+					p.Var = envName
+				} else {
+					p.Var = ""
+				}
+				p.Updated, p.Old = now, false
+				return nil
+			}
+			p := vault.Platform{Kind: "env", Target: target}
+			if keyName != envName {
+				p.Var = envName
+			}
+			k.AddPlatform(p, now)
+			return nil
+		})
+	}
+}
+
+func sameEnvTarget(recorded, abs, tilde string) bool {
+	if recorded == abs || recorded == tilde {
+		return true
+	}
+	if a, err := filepath.Abs(expandHomeQuick(recorded)); err == nil && filepath.Clean(a) == filepath.Clean(abs) {
+		return true
+	}
+	return false
+}
+
+func expandHomeQuick(t string) string {
+	t = strings.TrimSpace(t)
+	if t == "~" || strings.HasPrefix(t, "~/") || strings.HasPrefix(t, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			if t == "~" {
+				return home
+			}
+			return home + t[1:]
+		}
+	}
+	return t
 }

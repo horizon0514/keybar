@@ -857,7 +857,7 @@ func (a *app) formView(c *ui.Context, k ink) {
 		pageBody(c, "form", 14, func() {
 			if f.rotate {
 				key, _ := a.key(f.name)
-				ui.Text(c, "在服务商那里生成新密钥，粘贴到这里。保存后钥匙串更新；GitHub Actions / Vercel 会自动推送，其它平台进清单。").FontSize(12).TextColor(k.muted).LineHeight(1.45)
+				ui.Text(c, "在服务商那里生成新密钥，粘贴到这里。保存后钥匙串更新；GitHub Actions / Vercel / 本地 .env 会自动推送，其它平台进清单。").FontSize(12).TextColor(k.muted).LineHeight(1.45)
 				input("v1", "新值", "粘贴新密钥", &f.value, true, true)
 				input("v2", "再输入一次", "", &f.value2, true, false)
 				input("note", "备注（可选）", "例如：泄露通报后轮换", &f.note, false, false)

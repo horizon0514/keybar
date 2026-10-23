@@ -3,6 +3,7 @@ package importer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"keybar/vault"
@@ -59,5 +60,48 @@ func TestPlanStates(t *testing.T) {
 	}
 	if b, _ := v.Value("DIFF"); string(b) != "dummy-old" {
 		t.Error("changed the existing key")
+	}
+}
+
+func TestAttachEnvPlatforms(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app", ".env")
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, []byte("OPENAI_API_KEY=dummy-attach-0001\nOTHER_TOKEN=dummy-attach-0002\n"), 0o600)
+	v := &vault.Vault{Dir: t.TempDir(), Secrets: &vault.Memory{}, By: "test"}
+	plan, err := Read(v, path, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := plan.Apply(v)
+	AttachEnvPlatforms(v, path, r)
+	inv, _ := v.Inventory()
+	k, ok := inv.Find("OPENAI_API_KEY")
+	if !ok || len(k.Platforms) != 1 || k.Platforms[0].Kind != "env" || !k.Platforms[0].Auto() {
+		t.Fatalf("%+v", k)
+	}
+	if !strings.Contains(k.Platforms[0].Target, ".env") {
+		t.Error(k.Platforms[0].Target)
+	}
+	// rename: Var keeps file name
+	_ = os.WriteFile(path, []byte("OPENAI_API_KEY=dummy-attach-9999\n"), 0o600)
+	plan, _ = Read(v, path, "my_app", "")
+	for _, it := range plan.Conflicts() {
+		it.Choice = Rename
+		it.NewName = "OPENAI_API_KEY_MY_APP"
+	}
+	r = plan.Apply(v)
+	AttachEnvPlatforms(v, path, r)
+	inv, _ = v.Inventory()
+	k, ok = inv.Find("OPENAI_API_KEY_MY_APP")
+	if !ok || len(k.Platforms) != 1 || k.Platforms[0].Var != "OPENAI_API_KEY" {
+		t.Fatalf("rename plat %+v ok=%v", k, ok)
+	}
+	// second attach updates, does not duplicate
+	AttachEnvPlatforms(v, path, r)
+	inv, _ = v.Inventory()
+	k, _ = inv.Find("OPENAI_API_KEY_MY_APP")
+	if len(k.Platforms) != 1 {
+		t.Fatalf("dup %d", len(k.Platforms))
 	}
 }

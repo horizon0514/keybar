@@ -1,5 +1,5 @@
-// Package remote updates a key's new value where else it is stored, through
-// their APIs: GitHub Actions secrets and Vercel environment variables.
+// Package remote updates a key's new value where else it is stored: GitHub
+// Actions secrets, Vercel environment variables, and local .env files.
 package remote
 
 import (
@@ -58,6 +58,8 @@ func (s *Syncer) Update(ctx context.Context, key string, p vault.Platform, value
 		return s.github(ctx, key, p, value)
 	case "vercel":
 		return s.vercel(ctx, key, p, value)
+	case "env":
+		return s.env(ctx, key, p, value)
 	}
 	return fmt.Errorf("%s 只能手动更新", vault.KindName(p.Kind))
 }

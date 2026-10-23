@@ -1,10 +1,10 @@
 # KeyBar
 
-几个 API key 的轻量钥匙串：**存、复制、轮换**。值只在系统钥匙串里；菜单栏里搜一下、`⌘C` 复制；到期点「自动轮换」，粘贴新值后 GitHub Actions / Vercel 自动推送，其它平台进清单。
+几个 API key 的轻量钥匙串：**存、复制、轮换**。值只在系统钥匙串里；菜单栏里搜一下、`⌘C` 复制；到期点「自动轮换」，粘贴新值后 GitHub Actions / Vercel / 本地 `.env` 自动推送，其它平台进清单。
 
 - **钥匙串**：macOS 钥匙串 / Windows 凭据管理器 / Linux Secret Service。KeyBar 自己的文件里只有名字、平台、日期，没有值。
 - **菜单栏**：两栏清单 / 详情。添加只要名称 + 值（说明可选）；平台、轮换周期、标签在详情里以后再填。
-- **自动轮换**：提醒或详情里一点 → 粘贴新值 → 能自动同步的平台（GitHub Actions secrets、Vercel 环境变量）马上推；其余（Railway、TiDB、`.env`…）列成勾选清单。
+- **自动轮换**：提醒或详情里一点 → 粘贴新值 → 能自动同步的平台（GitHub Actions、Vercel、本地 `.env`）马上推；其余（Railway、TiDB…）列成勾选清单。
 - **扫描 / 连接代理（可选）**：扫描只认真正的 key（`*KEY*` / `*TOKEN*` / 认得出的格式），不把 `PORT` 推到脸上；连接代理优先显示已安装的。剪贴板检测、新 `.env` 提醒默认关闭。
 
 ![列表](docs/screenshots/list-light.png)
@@ -70,7 +70,7 @@ keys import .env          # 或面板里 ⌘I；同名不同值会逐个问你
 超期 / 快到期时菜单栏有角标，通知和托盘可以直接「自动轮换」：
 
 1. 在服务商那里生成新密钥，粘贴进 KeyBar；
-2. 保存后钥匙串更新；GitHub Actions secrets、Vercel 环境变量自动推送（需 KeyBar 里有 `GITHUB_TOKEN` / `VERCEL_TOKEN`）；
+2. 保存后钥匙串更新；GitHub Actions / Vercel（需对应 token）和已记录的本地 `.env` 自动写回；
 3. 其它平台留在详情的勾选清单里，改完勾掉。
 
 ```sh
@@ -145,7 +145,8 @@ keys get NAME --reveal        # 真要看明文时；会记日志，非交互时
 |---|---|---|
 | `github` | `github:owner/repo`、`github:owner/repo:DEPLOY_KEY?env=production` | 自动：用 KeyBar 里的 `GITHUB_TOKEN`（需 Secrets 写权限）加密后写入；没有就用 `gh secret set` |
 | `vercel` | `vercel:my-app?env=production,preview&team=team_x` | 自动：用 KeyBar 里的 `VERCEL_TOKEN` |
-| 其它 | `railway:api`、`tidb:cluster-1`、`env:~/proj/.env`、`1password:…` | 列入清单，手动更新后勾掉 |
+| `env` | `env:~/proj/.env`、`env:~/proj/.env.local` | 自动：改文件里对应变量（先备份 `*.keybar-backup`） |
+| 其它 | `railway:api`、`tidb:cluster-1`、`1password:…` | 列入清单，手动更新后勾掉 |
 
 `token=KEY` 可以给某个平台指定别的 token key。同步用的 token 本身也是 KeyBar 里的 key，同样不出现在环境变量里。
 
@@ -245,7 +246,7 @@ KEYBAR_DEMO=1 go run .                  # 示例数据（内存钥匙串），�
 KeyBar is a lightweight keychain for a few API keys: **store, copy, rotate**. Values live in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service); metadata (where else each key lives, last rotation) stays in KeyBar's own files.
 
 - Add a key with just a name and value (optional description). Platforms, rotate interval, tags live on the detail page.
-- Copy with `⌘C`. When a key is due, one-tap **自动轮换**: paste the new value, KeyBar updates the keychain, pushes to GitHub Actions secrets and Vercel env vars when it can, and leaves a checklist for everything else.
+- Copy with `⌘C`. When a key is due, one-tap **自动轮换**: paste the new value, KeyBar updates the keychain, pushes to GitHub Actions secrets, Vercel env vars, and local `.env` files when it can, and leaves a checklist for everything else.
 - Optional: `keys scan` / Settings → 自动录入 (clipboard watch and new-`.env` notices default **off**); `keys run` and MCP `keys connect` for people who want injection / agent approval — not the main path.
 - There is deliberately no `export`. Multi-device sync is out of scope for now.
 

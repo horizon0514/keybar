@@ -149,6 +149,23 @@ grep -rlF -- "$V1" "$KEYBAR_DIR" && bad "数据目录里出现了旧值" || ok "
 grep -rlF -- "$V2" "$KEYBAR_DIR" && bad "数据目录里出现了新值" || ok "数据目录里没有新值"
 grep -rlF -e "$V3" -e "$V4" "$KEYBAR_DIR" && bad "数据目录里出现了导入的值" || ok "数据目录里没有导入的值"
 
+echo "本地 .env 自动轮换"
+localproj="$HOME/code/local-rot"; mkdir -p "$localproj"
+printf 'LOCAL_API_KEY=%s\nNOTE=keep-me\nKEEP=1\n' "dummy-local-old-0001" >"$localproj/.env"
+out=$(keys import "$localproj/.env" </dev/null 2>&1)
+has "$out" "LOCAL_API_KEY" "导入本地 .env"
+out=$(keys show LOCAL_API_KEY)
+has "$out" ".env" "导入后挂上 env 平台"
+has "$out" "可自动更新" "env 平台可自动更新"
+printf '%s' "dummy-local-new-0002" | keys rotate LOCAL_API_KEY >/dev/null
+grep -qF 'LOCAL_API_KEY=dummy-local-new-0002' "$localproj/.env" && ok "轮换写回 .env" || { bad "轮换没写回 .env"; cat "$localproj/.env"; }
+grep -qF 'NOTE=keep-me' "$localproj/.env" && grep -qF 'KEEP=1' "$localproj/.env" && ok ".env 其它行保留" || bad ".env 其它行丢了"
+[ -f "$localproj/.env.keybar-backup" ] && grep -qF 'dummy-local-old-0001' "$localproj/.env.keybar-backup" && ok "写回前有 .keybar-backup" || bad "没有备份"
+# shell rc 导入不挂 env 平台
+printf 'export RC_ONLY_TOKEN=dummy-rc-token-0001\n' >"$HOME/.bashrc_keybar_e2e"
+# skip if scan doesn't pick arbitrary rc - just check zshrc path from earlier isn't given env kind via show GITHUB after scan
+# (covered by unit test: Attach only on DotEnv)
+
 echo "自动录入：扫描本机、运行时补录、剪贴板"
 F=E2eQx7Lp2Wm9Vb4Nr8Ty3Hs6Jc1Fg5Zu0   # 33 characters of filler: key-shaped dummies, never real
 E_OPENAI="sk-proj-$F$F"; E_GH="ghp_${F}AB"; E_GROQ="gsk_$F$F"; E_ANT="sk-ant-api03-$F$F"; E_HF="hf_$F"; E_XAI="xai-$F$F"

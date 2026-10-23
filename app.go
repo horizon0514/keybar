@@ -948,6 +948,7 @@ func (a *app) applyImport() {
 		}
 	}
 	r := p.Apply(a.v)
+	importer.AttachEnvPlatforms(a.v, p.Path, r)
 	msg := "导入：" + r.Summary()
 	if path, err := p.WriteMapping(r); err != nil {
 		msg += "；写 keys.toml 失败：" + err.Error()

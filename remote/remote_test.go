@@ -126,3 +126,10 @@ func TestManual(t *testing.T) {
 	}
 	_ = errors.New
 }
+
+func TestEnvAuto(t *testing.T) {
+	env, rail := vault.Platform{Kind: "env"}, vault.Platform{Kind: "railway"}
+	if !env.Auto() || rail.Auto() {
+		t.Fatal("Auto kinds")
+	}
+}

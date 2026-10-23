@@ -131,7 +131,7 @@ const usage = `keys — KeyBar 的命令行：密钥只存在系统钥匙串里�
   keys connect [代理...] [--status]   连接 AI 代理（claude-code、cursor、codex、gemini、opencode、pi、zed…；默认全部已安装的）
   keys disconnect [代理...]   断开
   keys rotate NAME [--no-sync] [--note 说明]
-                              换新值，自动更新 GitHub Actions / Vercel，列出其余要手动更新的平台
+                              换新值，自动更新 GitHub Actions / Vercel / 本地 .env，列出其余要手动更新的平台
   keys done NAME ID|all       勾掉清单上已更新的平台（undone 撤销）
   keys sync NAME [ID]         重试自动更新
   keys audit [-n 50] [--key NAME]  访问记录
@@ -976,6 +976,7 @@ func importCmd(e *Env, args []string) (int, error) {
 		e.decide(plan, it)
 	}
 	res := plan.Apply(e.Vault)
+	importer.AttachEnvPlatforms(e.Vault, plan.Path, res)
 	for _, it := range plan.Items {
 		switch {
 		case it.State == importer.New && res.Env[it.Var] != "":
@@ -1207,7 +1208,7 @@ func syncCmd(e *Env, args []string) (int, error) {
 			}
 		}
 		if len(ids) == 0 {
-			return 1, errors.New("没有可自动更新的平台（GitHub Actions、Vercel）")
+			return 1, errors.New("没有可自动更新的平台（GitHub Actions、Vercel、本地 .env）")
 		}
 	}
 	e.syncAll(*k, v, ids)

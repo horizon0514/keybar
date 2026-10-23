@@ -40,6 +40,7 @@ func Import(v *vault.Vault, g Group, clean bool, mode Mode) Outcome {
 	}
 	o.Result = p.Apply(v)
 	if g.Found.Kind == DotEnv {
+		importer.AttachEnvPlatforms(v, p.Path, o.Result)
 		o.Mapping, _ = p.WriteMapping(o.Result)
 	}
 	if !clean || len(o.Result.Env) == 0 {

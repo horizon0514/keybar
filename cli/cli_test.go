@@ -545,3 +545,26 @@ func TestEditRmDoctorConfig(t *testing.T) {
 		t.Error("unknown command")
 	}
 }
+
+func TestRotateWritesEnv(t *testing.T) {
+	x := newH(t)
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	_ = os.WriteFile(env, []byte("LOCAL_KEY=dummy-env-old-0001\nOTHER=keep\n"), 0o600)
+	x.run(dummy1, "add", "LOCAL_KEY", "--platform", "env:"+env)
+	if c := x.run(dummy2, "rotate", "LOCAL_KEY"); c != 0 {
+		t.Fatal(x.err.String())
+	}
+	b, _ := os.ReadFile(env)
+	if !strings.Contains(string(b), "LOCAL_KEY="+dummy2) || !strings.Contains(string(b), "OTHER=keep") {
+		t.Errorf("env file: %s", b)
+	}
+	if bb, err := os.ReadFile(env + ".keybar-backup"); err != nil || !strings.Contains(string(bb), "dummy-env-old-0001") {
+		t.Errorf("backup: %v %s", err, bb)
+	}
+	k, _ := x.env.Vault.Inventory()
+	key, _ := k.Find("LOCAL_KEY")
+	if len(key.Pending()) != 0 {
+		t.Errorf("pending %v", key.Pending())
+	}
+}
