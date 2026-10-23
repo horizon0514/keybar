@@ -61,10 +61,12 @@ func palette(c *ui.Context) ink {
 		gold: h("gold"), green: h("green"), red: h("red"), danger: h("danger"), line: h("line")}
 	if t.Dark {
 		k.hover = ui.RGB(255, 255, 255).Alpha(0.05)
-		k.chosen = k.link.Alpha(0.16)
+		// Softer selected-row background closer to system list gray
+		k.chosen = ui.RGB(255, 255, 255).Alpha(0.09)
 	} else {
 		k.hover = ui.RGB(0, 0, 0).Alpha(0.04)
-		k.chosen = k.link.Alpha(0.09)
+		// Muted gray selection in light mode, not a bright accent tint
+		k.chosen = ui.RGB(0, 0, 0).Alpha(0.06)
 	}
 	return k
 }
@@ -81,7 +83,8 @@ func (k ink) state(s vault.State) ui.Color {
 
 func (a *app) view(c *ui.Context) {
 	k := palette(c)
-	c.Root().TextColor(k.text).Background(k.bg).Radius(12).BorderWidth(1).BorderColor(k.line)
+	// Use a plain content surface; the window chrome supplies its own frame.
+	c.Root().TextColor(k.text).Background(k.bg)
 	c.OnShortcut(ui.Cmd, ui.KeyQ, a.quit)
 	if len(a.pending) > 0 {
 		a.approvalView(c, k)
@@ -224,11 +227,8 @@ func (a *app) mainView(c *ui.Context, k ink) {
 		if a.toast != "" {
 			left = a.toast
 		}
-		if a.page == pageDetail {
-			a.hintBar(c, k, left, hint("⌘R", "轮换", "⌘C", "复制值", "⌘⌫", "删除", "esc", "返回列表"))
-		} else {
-			a.hintBar(c, k, left, hint("↑↓", "选择", "↵", "复制", "⌘C", "复制", "⌘N", "添加", "⌘/", "快捷键"))
-		}
+		// Footer keeps only a quiet factual line; no persistent shortcut strip
+		a.hintBar(c, k, left, "")
 	})
 	if open && a.page == pageDetail {
 		msg := "钥匙串里的值也会删除。"
@@ -248,9 +248,10 @@ func storeShort() string {
 
 // header is the search, what needs doing, and the buttons.
 func (a *app) header(c *ui.Context, k ink) {
-	a.grip(ui.Row(c.Key("header"))).Padding(14, 16, 10, 18).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Icon(c, iconSearch).FontSize(18).TextColor(k.muted)
-		in := ui.TextInputBase(c.Key("q"), &a.query).Bind(&a.input).Grow(1).FontSize(18).
+	a.grip(ui.Row(c.Key("header"))).Padding(8, 12, 6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
+		// Slim, inline search — closer to a native toolbar search field
+		ui.Icon(c, iconSearch).FontSize(14).TextColor(k.muted)
+		in := ui.TextInputBase(c.Key("q"), &a.query).Bind(&a.input).Grow(1).FontSize(13).
 			Placeholder("搜索密钥、平台、项目").Label("搜索")
 		if in.Changed() {
 			a.chosen = 0
@@ -288,13 +289,8 @@ func (a *app) header(c *ui.Context, k ink) {
 		chip(over, "超期", k.danger, a.openDueRotate)
 		chip(soon, "快到期", k.gold, a.openDueRotate)
 		chip(pend, "待同步", k.gold, func() { a.setFilter(filterDue) })
-		if over+soon+pend == 0 && len(a.inv.Keys) > 0 {
-			chip(len(a.inv.Keys), "个都正常", k.green, nil)
-		}
 		iconButton(c.Key("add"), k, iconPlus, "添加密钥  "+hk("⌘N"), a.openAdd)
-		iconButton(c.Key("import"), k, iconImport, "导入 .env", a.openImport)
-		iconButton(c.Key("log"), k, iconLog, "访问记录", a.openLog)
-		iconButton(c.Key("gear"), k, iconGear, "更多…", func() { a.openSettings() })
+		iconButton(c.Key("gear"), k, iconGear, "设置  "+hk("⌘,"), a.openSettings)
 	})
 }
 
@@ -469,36 +465,42 @@ func (a *app) detailPane(c *ui.Context, k ink, key vault.Key) {
 			a.metaEditBlock(c.Key("meta"), k)
 		}
 		a.platformsBlock(c.Key("plats"), k, key, open)
-		allow := key.Agent != "deny"
-		ui.Row(c.Key("agent")).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
-				ui.Text(c, "允许 AI 代理申请使用").FontSize(13)
-				ui.Text(c, "通过 MCP 或命令行用它时，每次都要你批准；关掉后一律拒绝。").FontSize(11).TextColor(k.faint)
+		// Calmer detail by default: advanced sections behind a disclosure
+		if !a.showDetailMore {
+			linkButton(c.Key("more"), k, "更多详情", k.muted, func() { a.showDetailMore = true })
+		} else {
+			allow := key.Agent != "deny"
+			ui.Row(c.Key("agent")).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
+					ui.Text(c, "允许 AI 代理申请使用").FontSize(13)
+					ui.Text(c, "通过 MCP 或命令行用它时，每次都要你批准；关掉后一律拒绝。").FontSize(11).TextColor(k.faint)
+				})
+				if ui.Switch(c.Key("sw"), &allow).Label("允许 AI 代理申请使用").Changed() {
+					a.setAgent(key.Name, allow)
+				}
 			})
-			if ui.Switch(c.Key("sw"), &allow).Label("允许 AI 代理申请使用").Changed() {
-				a.setAgent(key.Name, allow)
+			if len(key.History) > 0 {
+				block(c, k, "轮换历史", "", func() {
+					for i := len(key.History) - 1; i >= 0 && i >= len(key.History)-6; i-- {
+						h := key.History[i]
+						ui.Row(c.Key(i)).Gap(10).Padding(2, 0).Children(func() {
+							ui.Text(c, h.At.Local().Format("2006-01-02 15:04")).FontSize(12).TextColor(k.muted).Width(116).Shrink(0)
+							ui.Text(c, h.Note).FontSize(12).Grow(1).Shrink(1).MinWidth(0).SingleLine()
+							if by := map[string]string{"cli": "命令行", "app": "KeyBar"}[h.By]; by != "" {
+								ui.Text(c, by).FontSize(11).TextColor(k.faint)
+							}
+						})
+					}
+				})
 			}
-		})
-		if len(key.History) > 0 {
-			block(c, k, "轮换历史", "", func() {
-				for i := len(key.History) - 1; i >= 0 && i >= len(key.History)-6; i-- {
-					h := key.History[i]
-					ui.Row(c.Key(i)).Gap(10).Padding(2, 0).Children(func() {
-						ui.Text(c, h.At.Local().Format("2006-01-02 15:04")).FontSize(12).TextColor(k.muted).Width(116).Shrink(0)
-						ui.Text(c, h.Note).FontSize(12).Grow(1).Shrink(1).MinWidth(0).SingleLine()
-						if by := map[string]string{"cli": "命令行", "app": "KeyBar"}[h.By]; by != "" {
-							ui.Text(c, by).FontSize(11).TextColor(k.faint)
-						}
-					})
-				}
-			})
-		}
-		if evs := a.accessFor(key.Name, 5); len(evs) > 0 {
-			block(c, k, "最近访问", "", func() {
-				for i, ev := range evs {
-					a.eventRow(c.Key(i), k, ev, false)
-				}
-			})
+			if evs := a.accessFor(key.Name, 5); len(evs) > 0 {
+				block(c, k, "最近访问", "", func() {
+					for i, ev := range evs {
+						a.eventRow(c.Key(i), k, ev, false)
+					}
+				})
+			}
+			linkButton(c.Key("less"), k, "收起", k.muted, func() { a.showDetailMore = false })
 		}
 		if open {
 			ui.Row(c.Key("danger")).Children(func() {
@@ -1078,6 +1080,12 @@ func (a *app) tabGeneral(c *ui.Context, k ink) {
 		}
 		numberField(c, k, "days", "默认轮换周期", "天", &a.editDays, days, func() { a.applyNumber("days") })
 		numberField(c, k, "remind", "提前提醒", "天", &a.editRemind, a.settings.RemindDays, func() { a.applyNumber("remind") })
+	})
+	section(c, k, "常用操作", "", func() {
+		ui.Row(c.Key("actions")).Gap(8).Children(func() {
+			smallButton(c.Key("import"), k, "导入 .env…", "", k.link, a.openImport)
+			smallButton(c.Key("log"), k, "访问记录…", "", k.muted, a.openLog)
+		})
 	})
 	section(c, k, "启动", "", func() {
 		on := a.loginItem()
